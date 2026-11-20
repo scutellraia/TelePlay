@@ -12,6 +12,8 @@ Stream and manage your Telegram files on any device — TV, Mobile, or Browser �
 ![React](https://img.shields.io/badge/React-18-61dafb.svg)
 ![Kotlin](https://img.shields.io/badge/Kotlin-Compose_TV-7f52ff.svg)
 
+> **About this fork** — in addition to upstream TelePlay it ships a self-hosted **upload hub** (`/up`) with resumable browser uploads, aria2 download tasks, lossless image archiving and automatic big-video splitting, plus **private folders**, hash reconciliation and a **daily maintenance** task. See [Upload Hub](#-upload-hub-up--api-reference) below.
+
 ---
 
 ## ✨ Features
@@ -28,9 +30,11 @@ Stream and manage your Telegram files on any device — TV, Mobile, or Browser �
 
 - Full file browser with folder navigation
 - Multi-select, batch delete, rename, and move operations
-- Context menu (right-click) on files
-- Inline video/audio player with seeking
+- Context menu (right-click) on files and folders
+- Inline video/audio player with seeking, speed control and “continue watching”
+- Built-in image / PDF viewer with ← → navigation and keyboard shortcuts
 - Three login methods (direct link, login code, [remote authorization](docs/SETUP.md#31-web-interface))
+- **Admin session from the upload hub** — one click on `/up` swaps the panel session for a 12-hour admin session, unlocking private folders and admin actions
 - Responsive — works on desktop and mobile
 
 ### 📺 Android TV & Mobile App — [Installation Guide](docs/SETUP.md#32-android-tv--mobile)
@@ -49,7 +53,23 @@ Stream and manage your Telegram files on any device — TV, Mobile, or Browser �
 - **High-speed streaming** — optional [multi-bot parallel downloads](docs/ARCHITECTURE.md#multi-client-mode-parallel-downloads)
 - **Restricted access** — [whitelist allowed users](docs/SETUP.md#-advanced-features) with `AUTH_USERS`
 - **Public sharing** — generate signed, time-limited links
+- **Private folders** — a folder (and its whole subtree) can be marked private: viewers get 404, only an admin session sees it
+- **Daily maintenance** — a background task prunes stale resumable-upload fragments and empty download directories
 - **One-command deploy** — [Docker Compose, Railway, Render, or CapRover](docs/DEPLOYMENT.md)
+
+### 📤 Upload Hub (`/up`) — [API Reference](docs/API_UPLOAD.md)
+
+Self-hosted upload panel served by the backend at `/up`, protected by its own password and session tokens.
+
+- **Browser upload** with adjustable concurrency (1–8 files in parallel) and per-file progress bars
+- **Resumable uploads** — an interrupted transfer continues from the last byte the server received
+- **Pause / Resume / Stop** — pause aborts every in-flight request, resume re-reads the server offset and continues
+- **Hash pre-check** — files already in the library are reported as duplicates and **never uploaded** (a short-circuit answer would otherwise surface as a browser "network error")
+- **Images are sent as documents** — no Telegram photo re-compression; thumbnails are generated locally with ffmpeg and cached
+- **Videos over 2 GB** are split automatically into ~1.9 GB parts (stream copy, no re-encode) and uploaded as separate episodes
+- **aria2 download tasks** — magnet / info-hash / `.torrent` / HTTP links, with a configurable default folder and completion hook into the library
+- **Failed uploads are kept on disk** and can be retried (individually or all) from the page
+- **“Enter TelePlay (admin)”** — exchanges the panel session for a 12-hour admin site session (stored in `sessionStorage`), so the main site shows private folders and admin actions
 
 ---
 
@@ -196,6 +216,14 @@ That's it! Your services are now running:
 | `WEB_BASE_URL`                |    ❌    | Public URL of the web app                                                                            |
 | `TELEGRAM_HELPER_BOT_TOKENS`  |    ❌    | Extra bot tokens for [parallel downloads](docs/ARCHITECTURE.md#multi-client-mode-parallel-downloads) |
 | `AUTH_USERS`                  |    ❌    | Comma-separated Telegram IDs for restricted access                                                   |
+| `ARIA2_RPC_URL`               |    ❌    | aria2 JSON-RPC endpoint (e.g. `http://aria2:6800/jsonrpc`); enables download tasks in `/up`          |
+| `ARIA2_RPC_SECRET`            |    ❌    | aria2 RPC secret                                                                                     |
+| `DOWNLOAD_DIR`               |    ❌    | Where aria2 writes downloads (default `/downloads`)                                                  |
+| `UPLOAD_TMP_DIR`              |    ❌    | Temp directory for resumable uploads (default `/tmp/tp-uploads`)                                     |
+| `UP_HOOK_SECRET`              |    ❌    | Shared secret used by the aria2 completion hook                                                      |
+| `UP_TG_LIMIT_BYTES`           |    ❌    | Videos above this size are split (default `2000 MiB`)                                                |
+| `UP_SEGMENT_LIMIT_BYTES`      |    ❌    | Target size of each split part (default `1900 MiB`)                                                  |
+| `TZ`                          |    ❌    | Container timezone (default `Asia/Shanghai`)                                                         |
 
 > **💡 DATABASE_URL Options:**
 >
@@ -216,6 +244,7 @@ That's it! Your services are now running:
 | **Auth**     | JWT (Access + Refresh Tokens)                    |
 | **Web**      | React 18, TypeScript, Vite                       |
 | **Android**  | Kotlin, Jetpack Compose for TV, ExoPlayer        |
+| **Downloads**| aria2 (magnet / torrent / HTTP)                  |
 | **Deploy**   | Docker, Docker Compose, Nginx                    |
 
 ---
@@ -226,9 +255,16 @@ That's it! Your services are now running:
 teleplay/
 ├── backend/                  # Python backend (FastAPI + Bot)
 │   ├── app/
-│   │   ├── routers/          # API endpoints (auth, files, folders, streaming, tv)
+│   │   ├── routers/          # API endpoints (auth, files, folders, streaming, tv, up)
 │   │   ├── bot.py            # Telegram bot command handlers
 │   │   ├── streaming.py      # Multi-client parallel streaming engine
+│   │   ├── tg_upload.py      # Telegram upload channel (image=document, video splitting)
+│   │   ├── thumbs.py         # Local thumbnail generation for document-uploaded images
+│   │   ├── maintenance.py    # Daily cleanup: resume fragments, empty download dirs
+│   │   ├── hash_sync.py      # Hash reconciliation between DB and Telegram
+│   │   ├── visibility.py     # Private-folder visibility rules
+│   │   ├── up_auth.py        # Session/password handling for the upload hub
+│   │   ├── static/up.html    # The /up upload panel (single page, no build step)
 │   │   ├── models.py         # SQLAlchemy ORM models
 │   │   └── main.py           # FastAPI app entry point
 │   ├── Dockerfile
@@ -238,6 +274,7 @@ teleplay/
 │   │   ├── components/       # UI components
 │   │   ├── lib/api.ts        # API client & hooks
 │   │   └── App.tsx           # Main app with routing
+│   ├── nginx.conf
 │   └── Dockerfile
 ├── android/                  # Android TV & Mobile app
 │   └── app/src/main/java/    # Kotlin (Compose + ExoPlayer)
@@ -245,6 +282,7 @@ teleplay/
 │   ├── ARCHITECTURE.md       # Technical deep-dive
 │   ├── DEPLOYMENT.md         # Deployment guide
 │   ├── SETUP.md              # Setup & usage guide
+│   ├── API_UPLOAD.md         # Upload hub / aria2 API reference
 │   └── RELEASING.md          # APK release process
 ├── docker-compose.yml
 └── .env.example
@@ -297,6 +335,7 @@ Open the `android/` folder in Android Studio and build.
 | **[Setup & Usage](docs/SETUP.md)**       | How the app works, bot commands, login methods, and troubleshooting   |
 | **[Deployment](docs/DEPLOYMENT.md)**     | Docker, VPS, Railway, Render, and CapRover deployment                 |
 | **[Architecture](docs/ARCHITECTURE.md)** | Technical deep-dive: streaming engine, API endpoints, database models |
+| **[Upload Hub API](docs/API_UPLOAD.md)** | `/up` panel: upload, resume, dedupe pre-check, aria2 tasks, retries      |
 | **[Releasing](docs/RELEASING.md)**       | APK build automation and signing via GitHub Actions                   |
 
 ---
