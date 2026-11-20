@@ -115,7 +115,8 @@ export const isAdminSession = (): boolean => {
 
 // Add auth token to requests
 api.interceptors.request.use((config) => {
-    const token = localStorage.getItem('access_token');
+    // 必须用 authToken()：admin 令牌在 sessionStorage，直接读 localStorage 会漏掉它
+    const token = authToken();
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
     }
