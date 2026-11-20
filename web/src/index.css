@@ -297,3 +297,27 @@ body {
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
+/* 普通账号（viewer）隐藏所有写操作入口 */
+body.viewer-mode [data-admin-only] {
+    display: none !important;
+}
+/* 左��边栏：保留滚动能力，但不显示滚动条 */
+.sidebar-scroll {
+    scrollbar-width: none;      /* Firefox */
+    -ms-overflow-style: none;   /* 旧 Edge */
+}
+.sidebar-scroll::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;              /* Chrome / Safari */
+}
+
+/* 列表卡片：移除 backdrop-blur（长列表滚动的性能杀手），纯底色 + 边框 */
+.card-flat {
+  @apply bg-dark-800/50 border border-white/[0.08] rounded-xl;
+}
+/* 长列表：让浏览器跳过视口外卡片的布局与绘制 */
+.card-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px;
+}

@@ -41,6 +41,7 @@ class FolderCreate(FolderBase):
 class FolderUpdate(BaseModel):
     name: Optional[str] = None
     parent_id: Optional[int] = None
+    is_private: Optional[bool] = None
 
 
 class FolderResponse(FolderBase):
@@ -49,7 +50,8 @@ class FolderResponse(FolderBase):
     created_at: datetime
     updated_at: datetime
     file_count: int = 0
-    
+    is_private: bool = False
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -94,6 +96,7 @@ class FileResponse(FileBase):
     stream_url: Optional[str] = None
     download_url: Optional[str] = None
     public_hash: Optional[str] = None
+    sha256: Optional[str] = None
     public_stream_url: Optional[str] = None
     last_pos: int = 0
     

@@ -2,7 +2,7 @@
  * FolderCard component - displays a folder in grid or list view with drag-drop support
  */
 import { useState } from 'react';
-import { Folder as FolderIcon, MoreVertical, ChevronRight } from 'lucide-react';
+import { Folder as FolderIcon, MoreVertical, ChevronRight , Lock } from 'lucide-react';
 import { Folder } from '../lib/api';
 import { useAppStore } from '../lib/store';
 
@@ -65,7 +65,7 @@ export default function FolderCard({ folder, viewMode, selected, onSelect, onOpe
                 onFileDrop(data.id, folder.id);
             }
         } catch (err) {
-            console.error('Invalid drop data:', err);
+            console.error('拖入数据无效：', err);
         }
     };
 
@@ -81,7 +81,8 @@ export default function FolderCard({ folder, viewMode, selected, onSelect, onOpe
         return (
             <div
                 className={`flex items-center gap-4 p-3 rounded-xl cursor-pointer transition-all duration-200 animate-slide-up active:scale-[0.99]
-                    glass-card hover:bg-white/[0.03] border-white/[0.05] group
+                    card-flat card-cv hover:bg-white/[0.03] border-white/[0.05] group
+                    ${folder.is_private ? 'ring-1 ring-amber-400/40 border-amber-400/30' : ''}
                     ${dropStyles} ${selectedStyles}`}
                 onClick={handleClick}
                 onContextMenu={handleContextMenu}
@@ -92,11 +93,13 @@ export default function FolderCard({ folder, viewMode, selected, onSelect, onOpe
             >
                 <div 
                     className={`w-12 h-12 rounded-lg flex items-center justify-center shrink-0 border transition-colors relative
-                        ${selected 
-                            ? 'bg-primary-500/20 border-primary-500/40' 
-                            : 'bg-primary-500/10 border-primary-500/20 group-hover:bg-primary-500/20'}`}
+                        ${folder.is_private
+                            ? 'bg-amber-500/10 border-amber-400/40'
+                            : selected
+                                ? 'bg-primary-500/20 border-primary-500/40'
+                                : 'bg-primary-500/10 border-primary-500/20 group-hover:bg-primary-500/20'}`}
                 >
-                    <FolderIcon className={`w-6 h-6 transition-colors ${selected ? 'text-primary-300' : 'text-primary-400 group-hover:text-primary-300'}`} />
+                    <FolderIcon className={`w-6 h-6 transition-colors ${folder.is_private ? 'text-amber-400' : selected ? 'text-primary-300' : 'text-primary-400 group-hover:text-primary-300'}`} />
                     
                     {/* Selection indicator for list view */}
                     <div 
@@ -111,9 +114,12 @@ export default function FolderCard({ folder, viewMode, selected, onSelect, onOpe
                 </div>
 
                 <div className="flex-1 min-w-0">
-                    <p className={`font-medium truncate text-sm transition-colors ${selected ? 'text-primary-300' : 'text-white group-hover:text-primary-300'}`}>{folder.name}</p>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                        <p className={`font-medium truncate text-sm transition-colors ${selected ? 'text-primary-300' : 'text-white group-hover:text-primary-300'}`}>{folder.name}</p>
+                        {folder.is_private && <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
+                    </div>
                     <p className="text-xs text-dark-400 mt-0.5">
-                        {folder.file_count} {folder.file_count === 1 ? 'file' : 'files'}
+                        {folder.file_count} 个文件
                     </p>
                 </div>
 
@@ -142,7 +148,8 @@ export default function FolderCard({ folder, viewMode, selected, onSelect, onOpe
     return (
         <div
             className={`p-4 rounded-xl cursor-pointer transition-all duration-300 group relative animate-scale-in select-none
-                glass-card hover:bg-dark-800/60 hover:shadow-xl hover:shadow-black/20 hover:-translate-y-1
+                card-flat card-cv hover:bg-dark-800/60 hover:shadow-xl hover:shadow-black/20 hover:-translate-y-1
+                ${folder.is_private ? 'ring-1 ring-amber-400/40 border-amber-400/30' : ''}
                 ${dropStyles} ${selectedStyles}`}
             onClick={handleClick}
             onContextMenu={handleContextMenu}
@@ -154,11 +161,13 @@ export default function FolderCard({ folder, viewMode, selected, onSelect, onOpe
             <div className="flex items-start justify-between mb-3">
                 <div 
                     className={`w-10 h-10 rounded-lg flex items-center justify-center border group-hover:scale-110 transition-all duration-300 relative
-                        ${selected 
-                            ? 'bg-gradient-to-br from-primary-500/20 to-primary-500/10 border-primary-500/40' 
-                            : 'bg-gradient-to-br from-primary-500/10 to-primary-500/5 border-primary-500/20 group-hover:border-primary-500/30'}`}
+                        ${folder.is_private
+                            ? 'bg-gradient-to-br from-amber-500/15 to-amber-500/5 border-amber-400/40 group-hover:border-amber-400/60'
+                            : selected
+                                ? 'bg-gradient-to-br from-primary-500/20 to-primary-500/10 border-primary-500/40'
+                                : 'bg-gradient-to-br from-primary-500/10 to-primary-500/5 border-primary-500/20 group-hover:border-primary-500/30'}`}
                 >
-                    <FolderIcon className={`w-5 h-5 transition-colors ${selected ? 'text-primary-300' : 'text-primary-400'}`} />
+                    <FolderIcon className={`w-5 h-5 transition-colors ${folder.is_private ? 'text-amber-400' : selected ? 'text-primary-300' : 'text-primary-400'}`} />
                     
                     {/* Selection indicator for grid view */}
                     <div 
@@ -188,11 +197,14 @@ export default function FolderCard({ folder, viewMode, selected, onSelect, onOpe
                 </button>
             </div>
 
-            <p className={`font-medium text-sm truncate transition-colors ${selected ? 'text-primary-300' : 'text-white group-hover:text-primary-300'}`} title={folder.name}>
-                {folder.name}
-            </p>
+            <div className="flex items-center gap-1.5 min-w-0">
+                <p className={`font-medium text-sm truncate transition-colors ${selected ? 'text-primary-300' : 'text-white group-hover:text-primary-300'}`} title={folder.name}>
+                    {folder.name}
+                </p>
+                {folder.is_private && <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
+            </div>
             <p className="text-xs text-dark-500 mt-1">
-                {folder.file_count} {folder.file_count === 1 ? 'file' : 'files'}
+                {folder.file_count} 个文件
             </p>
         </div>
     );

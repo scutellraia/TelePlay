@@ -27,9 +27,17 @@ interface AppState {
     viewMode: 'grid' | 'list';
     setViewMode: (mode: 'grid' | 'list') => void;
 
+    sortBy: 'date' | 'name' | 'size';
+    setSortBy: (by: 'date' | 'name' | 'size') => void;
+    sortDir: 'asc' | 'desc';
+    setSortDir: (dir: 'asc' | 'desc') => void;
+
     // Modals
     previewFile: TelegramFile | null;
     setPreviewFile: (file: TelegramFile | null) => void;
+
+    previewDoc: TelegramFile | null;
+    setPreviewDoc: (file: TelegramFile | null) => void;
 
     renameFile: TelegramFile | null;
     setRenameFile: (file: TelegramFile | null) => void;
@@ -89,12 +97,12 @@ export const useAppStore = create<AppState>((set) => ({
     setCurrentFolderId: (id) => set({ currentFolderId: id }),
 
     // Breadcrumbs
-    breadcrumbs: [{ id: null, name: 'My Files' }],
+    breadcrumbs: [{ id: null, name: '我的文件' }],
     setBreadcrumbs: (breadcrumbs) => set({ breadcrumbs }),
 
     // Navigation Section
     activeSection: 'files',
-    setActiveSection: (section) => set({ activeSection: section, currentFolderId: null, breadcrumbs: [{ id: null, name: section === 'files' ? 'My Files' : section === 'recent' ? 'Recently Added' : 'Continue Watching' }] }),
+    setActiveSection: (section) => set({ activeSection: section, currentFolderId: null, breadcrumbs: [{ id: null, name: section === 'files' ? '我的文件' : section === 'recent' ? '最近添加' : '继续观看' }] }),
 
     // Selection
     selectedFileIds: new Set(),
@@ -135,11 +143,17 @@ export const useAppStore = create<AppState>((set) => ({
 
     // View mode
     viewMode: 'grid',
+    sortBy: (localStorage.getItem('up_sort_by') as 'date' | 'name' | 'size') || 'date',
+    setSortBy: (by) => { localStorage.setItem('up_sort_by', by); set({ sortBy: by }); },
+    sortDir: (localStorage.getItem('up_sort_dir') as 'asc' | 'desc') || 'desc',
+    setSortDir: (dir) => { localStorage.setItem('up_sort_dir', dir); set({ sortDir: dir }); },
     setViewMode: (mode) => set({ viewMode: mode }),
 
     // Modals
     previewFile: null,
     setPreviewFile: (file) => set({ previewFile: file }),
+    previewDoc: null,
+    setPreviewDoc: (file) => set({ previewDoc: file }),
 
     renameFile: null,
     setRenameFile: (file) => set({ renameFile: file }),

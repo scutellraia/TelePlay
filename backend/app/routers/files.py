@@ -5,13 +5,14 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 import secrets
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func, delete, or_
 from sqlalchemy.orm import selectinload
 
 from ..database import get_db
 from ..models import File, User, WatchProgress
 from ..schemas import FileResponse, FileListResponse, FileUpdate, WatchProgressUpdate
-from ..auth import get_current_user
+from ..auth import get_current_user, require_admin, get_scope
+from ..visibility import file_visible, visible_folder_ids
 from ..telegram import delete_from_storage_channel
 from ..config import get_settings
 from ..services import (
@@ -35,9 +36,14 @@ async def list_files(
     per_page: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    scope: str = Depends(get_scope),
 ):
     """List user's files with optional filtering."""
     query = select(File).where(File.user_id == current_user.id).options(selectinload(File.watch_progress))
+
+    vis = await visible_folder_ids(db, current_user.id, scope)
+    if vis is not None:
+        query = query.where(or_(File.folder_id.is_(None), File.folder_id.in_(vis)))
     
     
     # Apply filters
@@ -76,6 +82,7 @@ async def get_recent_files(
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    scope: str = Depends(get_scope),
 ):
     """Get recently added files across all folders."""
     files = await fetch_recent_files(db, current_user.id, limit)
@@ -93,9 +100,13 @@ async def get_continue_watching(
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    scope: str = Depends(get_scope),
 ):
     """Get files with watch progress."""
     files = await fetch_continue_watching_files(db, current_user.id, limit)
+    vis = await visible_folder_ids(db, current_user.id, scope)
+    if vis is not None:
+        files = [x for x in files if x.folder_id is None or x.folder_id in vis]
     
     return FileListResponse(
         files=[FileResponse(**add_urls_to_file(f)) for f in files],
@@ -144,7 +155,7 @@ async def update_file(
     file_id: int,
     update_data: FileUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Update file metadata (rename, move to folder)."""
     result = await db.execute(
@@ -176,7 +187,7 @@ async def update_file(
 async def delete_file(
     file_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Delete a file from database and Telegram channel."""
     result = await db.execute(
@@ -201,7 +212,7 @@ async def delete_file(
 async def batch_delete_files(
     file_ids: list[int],
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Delete multiple files."""
     # Fetch all files
@@ -298,7 +309,7 @@ async def get_progress(
 async def share_file(
     file_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Generate a permanent public link for the file."""
     result = await db.execute(
@@ -328,7 +339,7 @@ async def share_file(
 async def revoke_share(
     file_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Revoke the public link for the file."""
     result = await db.execute(
@@ -354,7 +365,7 @@ async def revoke_share(
 async def batch_move_files(
     move_data: dict,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Move multiple files to a folder."""
     file_ids = move_data.get("ids", [])

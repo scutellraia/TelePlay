@@ -20,6 +20,9 @@ FROM nginx:alpine
 # Copy built assets
 COPY --from=builder /app/dist /usr/share/nginx/html
 
+# AriaNg GUI (aria2 web frontend)
+COPY aria2gui /usr/share/nginx/html/aria2
+
 # Copy nginx config
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 

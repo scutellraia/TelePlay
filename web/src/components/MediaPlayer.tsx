@@ -3,7 +3,7 @@
  */
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { X, Play, Pause, Volume2, VolumeX, Maximize, Minimize, SkipBack, SkipForward, Download, ExternalLink, AlertTriangle, Copy, PictureInPicture2, Gauge, ChevronDown, ChevronUp } from 'lucide-react';
-import { TelegramFile, formatDuration, useUpdateProgress, useFile, api } from '../lib/api';
+import { TelegramFile, formatDuration, useUpdateProgress, useFile, api, authToken } from '../lib/api';
 import { useAppStore } from '../lib/store';
 
 export default function MediaPlayer() {
@@ -57,7 +57,7 @@ function MediaPlayerContent({ file, onClose, isMinimized, setMinimized }: MediaP
                         setPublicUrl(getAbsoluteUrl(data.public_stream_url));
                     }
                 } catch (err) {
-                    console.error('Failed to create public link:', err);
+                    console.error('创建公开链接失败：', err);
                 }
             }
         };
@@ -233,7 +233,7 @@ function MediaPlayerContent({ file, onClose, isMinimized, setMinimized }: MediaP
                 case 'f':
                     toggleFullscreen();
                     break;
-                case 'Escape':
+                case '退出':
                     if (isFullscreen) {
                         document.exitFullscreen();
                     } else if (!isMinimized) {
@@ -270,7 +270,7 @@ function MediaPlayerContent({ file, onClose, isMinimized, setMinimized }: MediaP
 
     const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
-    const token = localStorage.getItem('access_token');
+    const token = authToken();
 
     const getAbsoluteUrl = (url: string) => {
         if (!url) return '';
@@ -333,7 +333,7 @@ function MediaPlayerContent({ file, onClose, isMinimized, setMinimized }: MediaP
                         <div className="w-16 h-16 rounded-2xl bg-yellow-500/20 flex items-center justify-center mx-auto mb-5 border border-yellow-500/30">
                             <AlertTriangle className="w-8 h-8 text-yellow-400" />
                         </div>
-                        <h3 className="text-xl font-bold text-white mb-2">Playback Not Supported</h3>
+                        <h3 className="text-xl font-bold text-white mb-2">不支持播放</h3>
                         <p className="text-dark-300 mb-6">{error}</p>
 
                         <div className="flex flex-col gap-3">
@@ -342,7 +342,7 @@ function MediaPlayerContent({ file, onClose, isMinimized, setMinimized }: MediaP
                                 className="btn-primary flex items-center justify-center gap-2"
                             >
                                 <ExternalLink className="w-4 h-4" />
-                                Open in VLC
+                                用 VLC 打开
                             </a>
                             <div className="flex gap-3">
                                 <Button
@@ -350,7 +350,7 @@ function MediaPlayerContent({ file, onClose, isMinimized, setMinimized }: MediaP
                                     className="flex-1 btn-secondary flex items-center justify-center gap-2"
                                 >
                                     <Copy className="w-4 h-4" />
-                                    Copy URL
+                                    复制链接
                                 </Button>
                                 <a
                                     href={externalUrl}
@@ -359,7 +359,7 @@ function MediaPlayerContent({ file, onClose, isMinimized, setMinimized }: MediaP
                                     onClick={(e) => e.stopPropagation()}
                                 >
                                     <Download className="w-4 h-4" />
-                                    Download
+                                    下载
                                 </a>
                             </div>
                         </div>
@@ -367,7 +367,7 @@ function MediaPlayerContent({ file, onClose, isMinimized, setMinimized }: MediaP
                             onClick={onClose}
                             className="mt-6 text-dark-400 hover:text-white text-sm transition-colors"
                         >
-                            Close
+                            关闭
                         </button>
                     </div>
                 ) : (
@@ -387,7 +387,7 @@ function MediaPlayerContent({ file, onClose, isMinimized, setMinimized }: MediaP
                                             }}
                                          />
                                          <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent flex items-end justify-center pb-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <span className="text-white text-sm font-medium">Original Artwork</span>
+                                            <span className="text-white text-sm font-medium">原始封面</span>
                                          </div>
                                     </div>
                                 ) : (
@@ -447,10 +447,10 @@ function MediaPlayerContent({ file, onClose, isMinimized, setMinimized }: MediaP
                     </div>
 
                     <div className="flex items-center gap-2 border-l border-white/10 pl-4">
-                         <button onClick={() => setMinimized(false)} className="p-2 text-dark-400 hover:text-white" title="Maximize">
+                         <button onClick={() => setMinimized(false)} className="p-2 text-dark-400 hover:text-white" title="最大化">
                             <ChevronUp className="w-5 h-5" />
                         </button>
-                        <button onClick={onClose} className="p-2 text-dark-400 hover:text-red-400" title="Close">
+                        <button onClick={onClose} className="p-2 text-dark-400 hover:text-red-400" title="关闭">
                             <X className="w-5 h-5" />
                         </button>
                     </div>
@@ -480,7 +480,7 @@ function MediaPlayerContent({ file, onClose, isMinimized, setMinimized }: MediaP
                              <button
                                 onClick={() => setMinimized(true)}
                                 className="p-2 text-white hover:bg-white/20 rounded-full transition-colors"
-                                title="Minimize"
+                                title="最小化"
                             >
                                 <ChevronDown className="w-6 h-6" />
                             </button>
@@ -586,7 +586,7 @@ function MediaPlayerContent({ file, onClose, isMinimized, setMinimized }: MediaP
                                         ? 'bg-primary-500/30 text-primary-300 border border-primary-500/40'
                                         : 'bg-white/10 text-white/80 border border-white/10 hover:bg-white/20 hover:text-white'
                                         }`}
-                                    title="Playback Speed"
+                                    title="播放速度"
                                 >
                                     <Gauge className="w-4 h-4" />
                                     <span>{playbackSpeed}x</span>
@@ -600,7 +600,7 @@ function MediaPlayerContent({ file, onClose, isMinimized, setMinimized }: MediaP
                                             ? 'bg-primary-500/30 text-primary-300'
                                             : 'hover:bg-white/10 text-white/80 hover:text-white'
                                             }`}
-                                        title="Picture in Picture"
+                                        title="画中画"
                                     >
                                         <PictureInPicture2 className="w-5 h-5" />
                                     </button>

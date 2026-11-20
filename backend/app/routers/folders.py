@@ -9,7 +9,8 @@ from sqlalchemy import select, func
 from ..database import get_db
 from ..models import Folder, File, User
 from ..schemas import FolderResponse, FolderCreate, FolderUpdate, FolderWithChildren
-from ..auth import get_current_user
+from ..auth import get_current_user, require_admin, get_scope
+from ..visibility import hidden_folder_ids, visible_folder_ids
 from ..telegram import delete_from_storage_channel
 
 
@@ -39,6 +40,7 @@ async def list_folders(
     parent_id: Optional[int] = Query(None, description="Filter by parent folder ID"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    scope: str = Depends(get_scope),
 ):
     """List user's folders optimally."""
     # Select folder and count of files in one query
@@ -51,13 +53,47 @@ async def list_folders(
     )
     
     if parent_id is not None:
-        stmt = stmt.where(Folder.parent_id == parent_id)
+        if parent_id == 0:
+            # 0 is the sentinel for "root level" so clients can request top-level only
+            stmt = stmt.where(Folder.parent_id.is_(None))
+        else:
+            stmt = stmt.where(Folder.parent_id == parent_id)
     else:
         stmt = stmt.where(Folder.parent_id.is_(None))
     
     result = await db.execute(stmt)
     rows = result.all()
-    
+
+    if scope != "admin":
+        hidden = await hidden_folder_ids(db, current_user.id)
+        rows = [(f, c) for f, c in rows if f.id not in hidden]
+
+    # 递归统计：子文件夹里的文件也算进父文件夹，避免「有子文件夹却显示 0 个文件」
+    all_folders = await db.execute(
+        select(Folder.id, Folder.parent_id).where(Folder.user_id == current_user.id)
+    )
+    children = {}
+    for fid, pid in all_folders.all():
+        children.setdefault(pid, []).append(fid)
+
+    counts_res = await db.execute(
+        select(File.folder_id, func.count(File.id))
+        .join(Folder, Folder.id == File.folder_id)
+        .where(Folder.user_id == current_user.id)
+        .group_by(File.folder_id)
+    )
+    direct_counts = {fid: cnt for fid, cnt in counts_res.all() if fid is not None}
+    memo = {}
+
+    def subtree_count(fid):
+        if fid in memo:
+            return memo[fid]
+        total = direct_counts.get(fid, 0)
+        for child in children.get(fid, []):
+            total += subtree_count(child)
+        memo[fid] = total
+        return total
+
     return [
         FolderResponse(
             id=folder.id,
@@ -66,9 +102,10 @@ async def list_folders(
             user_id=folder.user_id,
             created_at=folder.created_at,
             updated_at=folder.updated_at,
-            file_count=file_count
+            file_count=subtree_count(folder.id),
+        is_private=folder.is_private,
         )
-        for folder, file_count in rows
+        for folder, _direct in rows
     ]
 
 
@@ -76,6 +113,7 @@ async def list_folders(
 async def get_folder_tree(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    scope: str = Depends(get_scope),
 ):
     """Get the complete folder tree for the user optimally."""
     # Get all folders with counts in one query
@@ -89,7 +127,11 @@ async def get_folder_tree(
     
     result = await db.execute(stmt)
     rows = result.all()
-    
+
+    if scope != "admin":
+        hidden = await hidden_folder_ids(db, current_user.id)
+        rows = [(f, c) for f, c in rows if f.id not in hidden]
+
     # Build tree
     folder_map = {}
     for folder, file_count in rows:
@@ -101,6 +143,7 @@ async def get_folder_tree(
             "created_at": folder.created_at,
             "updated_at": folder.updated_at,
             "file_count": file_count,
+            "is_private": folder.is_private,
             "children": [],
         }
     
@@ -116,11 +159,70 @@ async def get_folder_tree(
     return roots
 
 
+@router.get("/{folder_id}/download-list")
+async def folder_download_list(
+    folder_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    scope: str = Depends(get_scope),
+):
+    """Return the subtree of a folder with relative paths, for building download lists."""
+    res = await db.execute(
+        select(Folder).where(Folder.id == folder_id, Folder.user_id == current_user.id)
+    )
+    root = res.scalar_one_or_none()
+    if not root:
+        raise HTTPException(status_code=404, detail="Folder not found")
+
+    if scope != "admin":
+        hidden = await hidden_folder_ids(db, current_user.id)
+        if root.id in hidden:
+            raise HTTPException(status_code=404, detail="Folder not found")
+
+    folders = (await db.execute(
+        select(Folder).where(Folder.user_id == current_user.id)
+    )).scalars().all()
+    by_id = {f.id: f for f in folders}
+    children = {}
+    for f in folders:
+        children.setdefault(f.parent_id, []).append(f)
+
+    hidden = await hidden_folder_ids(db, current_user.id) if scope != "admin" else set()
+
+    # 收集子树（保持路径）
+    entries = []
+    stack = [(root, root.name)]
+    while stack:
+        folder, prefix = stack.pop()
+        if folder.id in hidden:
+            continue
+        files = (await db.execute(
+            select(File).where(File.folder_id == folder.id, File.user_id == current_user.id)
+            .order_by(File.file_name)
+        )).scalars().all()
+        for f in files:
+            entries.append({"id": f.id, "name": f.file_name,
+                            "path": prefix + "/" + f.file_name, "size": f.file_size})
+        for child in sorted(children.get(folder.id, []), key=lambda x: x.name):
+            stack.append((child, prefix + "/" + child.name))
+
+    entries.sort(key=lambda e: e["path"])
+    from ..auth import create_download_token
+    token_30d = create_download_token(current_user.telegram_id, current_user.auth_version, root.id, 30)
+    return {
+        "download_token": token_30d,
+        "folder": {"id": root.id, "name": root.name},
+        "count": len(entries),
+        "total_bytes": sum(e["size"] for e in entries),
+        "entries": entries,
+    }
+
 @router.get("/{folder_id}", response_model=FolderResponse)
 async def get_folder(
     folder_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    scope: str = Depends(get_scope),
 ):
     """Get a specific folder by ID with file count."""
     stmt = (
@@ -137,7 +239,12 @@ async def get_folder(
         raise HTTPException(status_code=404, detail="Folder not found")
     
     folder, file_count = row
-    
+
+    if scope != "admin":
+        hidden = await hidden_folder_ids(db, current_user.id)
+        if folder.id in hidden:
+            raise HTTPException(status_code=404, detail="Folder not found")
+
     return FolderResponse(
         id=folder.id,
         name=folder.name,
@@ -146,6 +253,7 @@ async def get_folder(
         created_at=folder.created_at,
         updated_at=folder.updated_at,
         file_count=file_count,
+        is_private=folder.is_private,
     )
 
 
@@ -153,7 +261,7 @@ async def get_folder(
 async def create_folder(
     folder_data: FolderCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Create a new folder."""
     # Validate parent exists if specified
@@ -195,6 +303,7 @@ async def create_folder(
         created_at=folder.created_at,
         updated_at=folder.updated_at,
         file_count=0,
+        is_private=folder.is_private,
     )
 
 
@@ -203,7 +312,7 @@ async def update_folder(
     folder_id: int,
     update_data: FolderUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Update a folder (rename, move)."""
     result = await db.execute(
@@ -215,6 +324,9 @@ async def update_folder(
         raise HTTPException(status_code=404, detail="Folder not found")
     
     # Update fields
+    if getattr(update_data, "is_private", None) is not None:
+        folder.is_private = bool(update_data.is_private)
+
     if update_data.name is not None:
         folder.name = update_data.name
     if update_data.parent_id is not None:
@@ -248,6 +360,7 @@ async def update_folder(
         created_at=folder.created_at,
         updated_at=folder.updated_at,
         file_count=file_count,
+        is_private=folder.is_private,
     )
 
 
@@ -256,7 +369,7 @@ async def delete_folder(
     folder_id: int,
     move_files_to: Optional[int] = Query(None, description="Move files to this folder ID (null = root)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Delete a folder. Files can be moved to another folder or deleted."""
     result = await db.execute(
@@ -320,7 +433,7 @@ async def delete_folder(
 async def batch_delete_folders(
     folder_ids: List[int],
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Delete multiple folders."""
     # Fetch all folders
@@ -380,7 +493,7 @@ async def batch_delete_folders(
 async def batch_move_folders(
     move_data: dict,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Move multiple folders to another folder."""
     folder_ids = move_data.get("ids", [])
@@ -389,9 +502,26 @@ async def batch_move_folders(
     if target_id == 0:
         target_id = None
         
-    # Prevent moving folder into itself
+    # Prevent moving a folder into itself or into one of its descendants
     if target_id in folder_ids:
         raise HTTPException(status_code=400, detail="Cannot move a folder into itself")
+
+    if target_id is not None:
+        ancestors = set()
+        cursor = target_id
+        while cursor is not None and cursor not in ancestors:
+            if cursor in folder_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot move a folder into its own subfolder",
+                )
+            ancestors.add(cursor)
+            row = await db.execute(
+                select(Folder.parent_id).where(
+                    Folder.id == cursor, Folder.user_id == current_user.id
+                )
+            )
+            cursor = row.scalar_one_or_none()
         
     # Verify target parent folder belongs to user
     if target_id is not None:

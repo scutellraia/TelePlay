@@ -53,7 +53,7 @@ export default function RenameModal({ isOpen, onClose, onRename, currentName, it
             <div className="bg-dark-800 rounded-xl border border-dark-600 p-6 w-full max-w-md shadow-2xl">
                 <div className="flex items-center justify-between mb-4">
                     <h2 className="text-lg font-semibold text-white">
-                        Rename {itemType === 'file' ? 'File' : 'Folder'}
+                        Rename {itemType === 'file' ? '文件' : '文件夹'}
                     </h2>
                     <button onClick={onClose} className="text-dark-400 hover:text-white transition-colors">
                         <X className="w-5 h-5" />
@@ -76,14 +76,14 @@ export default function RenameModal({ isOpen, onClose, onRename, currentName, it
                             onClick={onClose}
                             className="flex-1 px-4 py-2 bg-dark-700 hover:bg-dark-600 text-white rounded-lg transition-colors"
                         >
-                            Cancel
+                            取消
                         </button>
                         <button
                             type="submit"
                             disabled={!name.trim() || name === currentName}
                             className="flex-1 px-4 py-2 bg-primary-600 hover:bg-primary-500 disabled:bg-dark-600 disabled:text-dark-400 text-white rounded-lg transition-colors"
                         >
-                            Rename
+                            重命名
                         </button>
                     </div>
                 </form>

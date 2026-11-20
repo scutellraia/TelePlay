@@ -97,6 +97,22 @@ export const api = axios.create({
     baseURL: '/api',
 });
 
+// 管理令牌放在 sessionStorage（由 /up 页面签发，关闭标签页即失效），统一从这里取
+export const authToken = (): string | null =>
+    sessionStorage.getItem('admin_token') || localStorage.getItem('access_token');
+
+export const isAdminSession = (): boolean => {
+    const t = sessionStorage.getItem('admin_token');
+    if (!t) return false;
+    try {
+        const part = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+        const payload = JSON.parse(decodeURIComponent(escape(atob(part))));
+        return payload.scope === 'admin' && (!payload.exp || payload.exp * 1000 > Date.now());
+    } catch {
+        return false;
+    }
+};
+
 // Add auth token to requests
 api.interceptors.request.use((config) => {
     const token = localStorage.getItem('access_token');
@@ -125,6 +141,9 @@ const processQueue = (error: any, token: string | null = null) => {
     failedQueue = [];
 };
 
+// 401 时不要硬跳 /login：如果当前就在登录页，再跳一次会整页重载 → 无限刷新
+const onAuthPage = () => /^\/(login|auth)(?:[/?#]|$)/.test(window.location.pathname);
+
 // Handle 401 and 429 errors
 api.interceptors.response.use(
     (response) => response,
@@ -137,7 +156,7 @@ api.interceptors.response.use(
                 localStorage.removeItem('access_token');
                 localStorage.removeItem('refresh_token');
                 localStorage.removeItem('user');
-                window.location.href = '/login';
+                if (!onAuthPage()) window.location.href = '/login';
                 return Promise.reject(error);
             }
 
@@ -182,7 +201,7 @@ api.interceptors.response.use(
                 localStorage.removeItem('access_token');
                 localStorage.removeItem('refresh_token');
                 localStorage.removeItem('user');
-                window.location.href = '/login';
+                if (!onAuthPage()) window.location.href = '/login';
                 return Promise.reject(err);
             } finally {
                 isRefreshing = false;
@@ -257,9 +276,10 @@ export const useVerifyLoginCode = () => {
 
 // ============== Files Hooks ==============
 
-export const useFiles = (folderId?: number | null, fileType?: string, search?: string, page = 1) => {
+export const useFiles = (folderId?: number | null, fileType?: string, search?: string, page = 1, enabled = true) => {
     return useQuery({
         queryKey: ['files', folderId, fileType, search, page],
+        enabled,
         queryFn: async () => {
             const params: Record<string, any> = {};
             if (folderId !== undefined) params.folder_id = folderId;

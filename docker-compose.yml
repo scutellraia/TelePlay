@@ -62,11 +62,42 @@ services:
 
       # Web URL
       WEB_BASE_URL: ${WEB_BASE_URL:-http://localhost}
+
+      # Upload hub (/up)
+      ARIA2_RPC_URL: http://aria2:6800/jsonrpc
+      ARIA2_RPC_SECRET: ${ARIA2_RPC_SECRET:-teleplay}
+      UP_HOOK_SECRET: ${UP_HOOK_SECRET:-teleplay-hook}
+      ARIA2_RECONCILE_SECONDS: ${ARIA2_RECONCILE_SECONDS:-300}
+      DOWNLOAD_DIR: /downloads
+      UPLOAD_TMP_DIR: /tmp/tp-uploads
+      UP_STATE_FILE: /app/session/up-state.json
+      UP_STATUS_FILE: /app/status/status.json
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
       # Persist Telegram session files only (do not mount over /app — that hides rebuilt code)
       - telegram_session:/app/session
+      - downloads:/downloads
+      - /home/ubuntu/tp-status:/app/status:ro
+      - upload_tmp:/tmp/tp-uploads
+    networks:
+      - telegram-tv-network
+
+  # -----------------------------------------
+  # aria2 (BT downloads, JSON-RPC only, no GUI)
+  # Pushes a completion event to the backend via on-complete.sh
+  # -----------------------------------------
+  aria2:
+    build: ./aria2
+    restart: unless-stopped
+    environment:
+      RPC_SECRET: ${ARIA2_RPC_SECRET:-teleplay}
+      UP_HOOK_SECRET: ${UP_HOOK_SECRET:-teleplay-hook}
+      UP_BACKEND_URL: http://backend:8000
+      TZ: Asia/Shanghai
+    volumes:
+      - aria2_config:/config
+      - downloads:/downloads
     networks:
       - telegram-tv-network
 
@@ -87,9 +118,14 @@ services:
 # Volumes
 # -----------------------------------------
 volumes:
+  upload_tmp:
   postgres_data:
     driver: local
   telegram_session:
+    driver: local
+  aria2_config:
+    driver: local
+  downloads:
     driver: local
 
 # -----------------------------------------

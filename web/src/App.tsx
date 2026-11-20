@@ -1,6 +1,6 @@
 import { Routes, Route, Navigate, useSearchParams, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
-import { useCurrentUser, useLoginWithCode, useBotInfo, useGenerateLoginCode, useVerifyLoginCode } from './lib/api';
+import { useCurrentUser, useLoginWithCode, useBotInfo, useGenerateLoginCode, useVerifyLoginCode, authToken } from './lib/api';
 import FileBrowser from './components/FileBrowser';
 import GlobalContextMenu from './components/GlobalContextMenu';
 import logo from './assets/logo.png';
@@ -9,13 +9,13 @@ function AuthCallback() {
     const [searchParams] = useSearchParams();
     const navigate = useNavigate();
     const token = searchParams.get('token');
-    const [status, setStatus] = useState('Processing...');
+    const [status, setStatus] = useState('处理中…');
     const [saved, setSaved] = useState(false);
 
     useEffect(() => {
         if (token) {
             try {
-                console.log('Token received:', token.substring(0, 20) + '...');
+                console.log('已收到令牌：', token.substring(0, 20) + '...');
                 localStorage.setItem('access_token', token);
                 const check = localStorage.getItem('access_token');
                 if (check === token) {
@@ -102,7 +102,7 @@ function LoginPage() {
                 setIsPolling(true);
             },
             onError: (err: any) => {
-                setError(err.response?.data?.detail || "Failed to generate code");
+                setError(err.response?.data?.detail || "生成验证码失败");
             }
         });
     }, [generateCode]);
@@ -141,7 +141,7 @@ function LoginPage() {
                 window.location.href = '/';
             },
             onError: (err: any) => {
-                setError(err.response?.data?.detail || "Invalid code");
+                setError(err.response?.data?.detail || "验证码无效");
             }
         });
     };
@@ -163,7 +163,7 @@ function LoginPage() {
                     TelePlay
                 </h1>
                 <p className="text-dark-400 mb-8">
-                    Stream your files from Telegram
+                    从 Telegram 串流你的文件
                 </p>
 
                 <div className="space-y-6">
@@ -173,13 +173,13 @@ function LoginPage() {
                             <svg className="w-5 h-5 text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
                             </svg>
-                            Login with Code
+                            用验证码登录
                         </h3>
                         <form onSubmit={handleManualLogin} className="flex flex-col gap-3">
                             <div className="relative">
                                 <input
                                     type="text"
-                                    placeholder="ENTER 6-DIGIT CODE"
+                                    placeholder="输入 6 位验证码"
                                     value={code}
                                     onChange={(e) => setCode(e.target.value.toUpperCase())}
                                     maxLength={6}
@@ -199,9 +199,9 @@ function LoginPage() {
                                 {isVerifying ? (
                                     <span className="flex items-center justify-center gap-2">
                                         <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                                        Verifying...
+                                        验证中…
                                     </span>
-                                ) : 'Login'}
+                                ) : '登录'}
                             </button>
                             {error && (
                                 <p className="text-red-400 text-sm mt-1">
@@ -213,12 +213,12 @@ function LoginPage() {
                         {isPolling && (
                             <div className="flex items-center justify-center gap-2 mt-4 text-xs text-dark-400">
                                 <div className="w-2 h-2 bg-primary-500 rounded-full animate-pulse"></div>
-                                Waiting for confirmation...
+                                等待确认…
                             </div>
                         )}
                         
                         <p className="text-xs text-dark-500 mt-4">
-                            Send <span className="text-primary-400 font-mono bg-dark-800/50 px-1.5 py-0.5 rounded">/login {code || 'CODE'}</span> to the bot to get a code.
+                            发送 <span className="text-primary-400 font-mono bg-dark-800/50 px-1.5 py-0.5 rounded">/login {code || 'CODE'}</span> 给机器人以获取验证码。
                         </p>
                     </div>
 
@@ -227,7 +227,7 @@ function LoginPage() {
                             <div className="w-full border-t border-white/[0.06]"></div>
                         </div>
                         <div className="relative flex justify-center text-xs uppercase">
-                            <span className="bg-dark-900/80 px-3 text-dark-500">Or open bot directly</span>
+                            <span className="bg-dark-900/80 px-3 text-dark-500">或直接打开机器人</span>
                         </div>
                     </div>
 
@@ -254,14 +254,15 @@ function BotLink({ code }: { code?: string }) {
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.161c-.18 1.897-.962 6.502-1.359 8.627-.168.9-.5 1.201-.82 1.23-.697.064-1.226-.461-1.901-.903-1.056-.692-1.653-1.123-2.678-1.799-1.185-.781-.417-1.21.258-1.911.177-.184 3.247-2.977 3.307-3.23.007-.032.015-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.139-5.062 3.345-.479.329-.913.489-1.302.481-.428-.009-1.252-.242-1.865-.442-.751-.244-1.349-.374-1.297-.789.027-.216.324-.437.893-.663 3.498-1.524 5.831-2.529 6.998-3.015 3.333-1.386 4.025-1.627 4.477-1.635.099-.002.321.023.465.141.121.099.155.232.17.325.015.094.034.31.019.478z" />
             </svg>
-            Open Telegram Bot
+            打开 Telegram 机器人
         </a>
     );
 }
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
     const { data: user, isLoading, error } = useCurrentUser();
-    const token = localStorage.getItem('access_token');
+    // 管理员令牌存在 sessionStorage（由 /up 入口签发），这里必须用统一的取法
+    const token = authToken();
 
     console.log('[ProtectedRoute] Token exists:', !!token);
     console.log('[ProtectedRoute] isLoading:', isLoading);
@@ -278,7 +279,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
             <div className="min-h-screen flex items-center justify-center bg-dark-950">
                 <div className="text-center">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-500 mx-auto mb-4"></div>
-                    <p className="text-dark-400">Checking authentication...</p>
+                    <p className="text-dark-400">正在检查登录状态…</p>
                 </div>
             </div>
         );
@@ -290,9 +291,9 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-dark-950 p-4">
                 <div className="text-center max-w-md">
-                    <p className="text-red-400 text-lg mb-4">Authentication Error</p>
+                    <p className="text-red-400 text-lg mb-4">登录失败</p>
                     <p className="text-dark-400 text-sm mb-4">
-                        {error instanceof Error ? error.message : 'Failed to verify token'}
+                        {error instanceof Error ? error.message : '验证码校验失败'}
                     </p>
                     <button
                         onClick={() => {
@@ -301,7 +302,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
                         }}
                         className="px-4 py-2 bg-primary-600 hover:bg-primary-700 rounded text-white"
                     >
-                        Go to Login
+                        前往登录
                     </button>
                 </div>
             </div>
@@ -312,12 +313,14 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 }
 
 import MediaPlayer from './components/MediaPlayer';
+import DocViewer from './components/DocViewer';
 
 function App() {
     return (
         <>
             <GlobalContextMenu />
             <MediaPlayer />
+            <DocViewer />
             <Routes>
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/auth" element={<AuthCallback />} />

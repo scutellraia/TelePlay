@@ -19,7 +19,13 @@ logging.getLogger("pyrogram").setLevel(logging.INFO)
 from .config import get_settings
 from .database import init_db
 from .telegram import start_telegram_client, stop_telegram_client
-from .routers import files_router, folders_router, streaming_router, auth_router, tv_router
+from .routers import files_router, folders_router, streaming_router, auth_router, tv_router, up_router
+
+# Show our own INFO logs (module loggers default to WARNING).
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s:     [%(name)s] %(message)s",
+)
 
 settings = get_settings()
 
@@ -38,10 +44,27 @@ async def lifespan(app: FastAPI):
     logger.info("Database initialized")
     await start_telegram_client()
     logger.info("Telegram client started")
-    
+
+    from .routers.up import start_worker, stop_worker
+    if os.environ.get("ARIA2_RPC_URL"):
+        start_worker()
+        logger.info("Upload hub worker started")
+
+    from .maintenance import start_maintenance, stop_maintenance
+    start_maintenance()
+    logger.info("Daily maintenance task started")
+
     yield
-    
+
     logger.info("Shutting down...")
+    try:
+        stop_maintenance()
+    except Exception:
+        pass
+    try:
+        await stop_worker()
+    except Exception:
+        pass
     await stop_telegram_client()
     logger.info("Telegram client stopped")
 
@@ -106,6 +129,7 @@ app.include_router(files_router, prefix="/api")
 app.include_router(folders_router, prefix="/api")
 app.include_router(streaming_router, prefix="/api")
 app.include_router(tv_router, prefix="/api")
+app.include_router(up_router, prefix="/up")
 
 
 

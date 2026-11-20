@@ -35,6 +35,8 @@ class Folder(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("folders.id", ondelete="CASCADE"))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # 私有文件夹：对 viewer 会话（及其整棵子树）不可见
+    is_private: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -77,6 +79,10 @@ class File(Base):
     
     # Sharing
     public_hash: Mapped[Optional[str]] = mapped_column(String(64), unique=True, index=True)
+    # Content hash (sha256 hex) for integrity checks and de-duplication
+    sha256: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    # True when the user renamed the file: the telegram sync must not overwrite it
+    name_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

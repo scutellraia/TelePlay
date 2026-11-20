@@ -7,15 +7,17 @@ interface DeleteConfirmModalProps {
     type: 'file' | 'folder' | 'multiple';
     name?: string;
     count?: number;
+    fileCount?: number;
     onConfirm: () => void;
     onClose: () => void;
 }
 
-export default function DeleteConfirmModal({ type, name, count = 1, onConfirm, onClose }: DeleteConfirmModalProps) {
-    const title = count > 1 ? `Delete ${count} items` : `Delete ${type}`;
-    const message = count > 1 
-        ? `Are you sure you want to delete these ${count} items?`
-        : <>Are you sure you want to delete <span className="text-white font-medium">"{name}"</span>?</>;
+export default function DeleteConfirmModal({ type, name, count = 1, fileCount, onConfirm, onClose }: DeleteConfirmModalProps) {
+    const what = type === 'folder' ? '文件夹' : '文件';
+    const title = count > 1 ? `删除 ${count} 项` : `删除${what}`;
+    const message = count > 1
+        ? `确定要删除这 ${count} 项吗？`
+        : <>确定要删除{what} <span className="text-white font-medium">「{name}」</span>？</>;
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
@@ -34,11 +36,13 @@ export default function DeleteConfirmModal({ type, name, count = 1, onConfirm, o
                     <p>{message}</p>
                     {type === 'folder' && (
                         <p className="mt-2 text-sm text-dark-400">
-                            Files in this folder will be moved to root.
+                            {typeof fileCount === 'number'
+                                ? `该文件夹及其子文件夹内的 ${fileCount} 个文件将被一并删除（不会移动到根目录）。`
+                                : '该文件夹及其子文件夹内的文件将被一并删除（不会移动到根目录）。'}
                         </p>
                     )}
                     <p className="mt-2 text-sm text-red-400">
-                        This action cannot be undone.
+                        此操作无法撤销。
                     </p>
                 </div>
 
@@ -47,13 +51,13 @@ export default function DeleteConfirmModal({ type, name, count = 1, onConfirm, o
                         onClick={onClose}
                         className="px-4 py-2 text-dark-400 hover:text-white transition-colors"
                     >
-                        Cancel
+                        取消
                     </button>
                     <button
                         onClick={onConfirm}
                         className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-medium transition-colors"
                     >
-                        Delete
+                        删除
                     </button>
                 </div>
             </div>

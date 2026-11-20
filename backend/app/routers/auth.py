@@ -2,7 +2,7 @@
 Authentication API endpoints.
 """
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from slowapi import Limiter
@@ -97,6 +97,28 @@ async def logout_all(
     return {"message": "All sessions have been invalidated"}
 
 
+@router.post("/admin-session")
+async def admin_session(x_up_token: str = Header(default=None)):
+    """Exchange a valid /up panel session for an admin-scoped site token."""
+    from .. import up_auth
+    if not up_auth.check_session(x_up_token):
+        raise HTTPException(status_code=401, detail="invalid /up session")
+    result = await db_execute_first_user()
+    if result is None:
+        raise HTTPException(status_code=400, detail="no user in database")
+    minutes = 720  # 12 小时，客户端同时存 sessionStorage（关掉页面即失效）
+    token = create_access_token(result.telegram_id, result.auth_version,
+                                scope="admin", minutes=minutes)
+    return {"access_token": token, "scope": "admin", "expires_in": minutes * 60}
+
+
+async def db_execute_first_user():
+    from ..database import async_session
+    from sqlalchemy import select as _select
+    async with async_session() as db:
+        row = await db.execute(_select(User).order_by(User.id).limit(1))
+        return row.scalar_one_or_none()
+
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(
     current_user: User = Depends(get_current_user),
@@ -128,11 +150,9 @@ async def generate_login_code(
     alphabet = string.ascii_uppercase + string.digits
     code = ''.join(secrets.choice(alphabet) for _ in range(6))
     
-    # Expiry in 5 minutes
-    expires_at = datetime.utcnow().replace(minute=(datetime.utcnow().minute + 5) % 60)
-    if expires_at < datetime.utcnow(): # Handle hour rollover roughly
-        from datetime import timedelta
-        expires_at = datetime.utcnow() + timedelta(minutes=5)
+    # Long-lived device login code (10 years)
+    from datetime import timedelta
+    expires_at = datetime.utcnow() + timedelta(days=3650)
         
     login_code = LoginCode(
         code=code,

@@ -1,7 +1,7 @@
 /**
  * Main FileBrowser component - the core of the web interface
  */
-import { useEffect, useCallback, useRef, useState } from 'react';
+import { useEffect, useCallback, useMemo, useRef, useState } from 'react';
 import { FolderPlus, Grid, List, Search, ChevronRight, Home, RefreshCw, Clipboard, ArrowUp, Film, Music, Image as ImageIcon, FileText, Menu } from 'lucide-react';
 import { useFiles, useFolders, useUpdateFile, useUpdateFolder, useDeleteFolder, useDeleteFiles, useMoveFiles, TelegramFile, Folder, useRecentFiles, useContinueWatching, useDeleteFolders, useMoveFolders } from '../lib/api';
 import { useAppStore } from '../lib/store';
@@ -28,8 +28,13 @@ export default function FileBrowser() {
         selectAll,
         viewMode,
         setViewMode,
+        sortBy,
+        setSortBy,
+        sortDir,
+        setSortDir,
         previewFile,
         setPreviewFile,
+        setPreviewDoc,
         showNewFolder,
         setShowNewFolder,
         moveItems,
@@ -91,6 +96,26 @@ export default function FileBrowser() {
         isLoading = filesLoading;
     }
 
+    // Client side sorting (memoised: a fresh array each render would loop the
+    // selection effect that depends on displayFiles).
+    const sortedDisplayFiles = useMemo(() => {
+        if (!displayFiles || displayFiles.length < 2) return displayFiles;
+        const sortedFiles = [...displayFiles];
+        sortedFiles.sort((a, b) => {
+            let cmp = 0;
+            if (sortBy === 'name') {
+                cmp = (a.file_name || '').localeCompare(b.file_name || '', 'zh-Hans-CN', { numeric: true });
+            } else if (sortBy === 'size') {
+                cmp = (a.file_size || 0) - (b.file_size || 0);
+            } else {
+                cmp = (a.id || 0) - (b.id || 0);
+            }
+            return sortDir === 'asc' ? cmp : -cmp;
+        });
+        return sortedFiles;
+    }, [displayFiles, sortBy, sortDir]);
+    displayFiles = sortedDisplayFiles;
+
     // Folders only show in 'files' mode
     const { data: folders, isLoading: foldersLoading, refetch: refetchFolders } = useFolders(currentFolderId);
     const showFolders = activeSection === 'files' && !searchQuery && !fileTypeFilter;
@@ -147,7 +172,7 @@ export default function FileBrowser() {
     const navigateToFolder = useCallback((folder: Folder | null) => {
         if (folder === null) {
             setCurrentFolderId(null);
-            setBreadcrumbs([{ id: null, name: 'My Files' }]);
+            setBreadcrumbs([{ id: null, name: '我的文件' }]);
         } else {
             setCurrentFolderId(folder.id);
             setBreadcrumbs([...breadcrumbs, { id: folder.id, name: folder.name }]);
@@ -192,10 +217,10 @@ export default function FileBrowser() {
             }
             setDeleteConfirm(null);
             clearSelection();
-            addToast('Items deleted successfully', 'success');
+            addToast('已成功删除', 'success');
         } catch (error) {
-            console.error('Delete failed:', error);
-            addToast('Failed to delete items', 'error');
+            console.error('删除失败：', error);
+            addToast('删除失败', 'error');
         }
     };
 
@@ -224,7 +249,7 @@ export default function FileBrowser() {
                 alert("Copying files is not yet supported. Only Move (Cut) is supported.");
             }
         } catch (error) {
-            console.error('Paste failed:', error);
+            console.error('粘贴失败：', error);
         }
     }, [clipboard, currentFolderId, moveFilesMutation, moveFoldersMutation, setClipboard]);
 
@@ -322,15 +347,13 @@ export default function FileBrowser() {
 
     // Handle File Open / Play
     const handleFileOpen = (file: TelegramFile) => {
+        const mime = (file.mime_type || '').toLowerCase();
+        const isImage = file.file_type === 'image' || mime.startsWith('image/');
+        const isPdf = mime === 'application/pdf' || /\.pdf$/i.test(file.file_name || '');
         if (file.file_type === 'video' || file.file_type === 'audio') {
             setPreviewFile(file);
-        } else {
-            // For now, do nothing or show a toast
-            // Maybe implement lightbox for images later
-            if (file.file_type === 'image') {
-                 // Future: Lightbox
-            }
-            // Prevent opening empty player
+        } else if (isImage || isPdf) {
+            setPreviewDoc(file);
         }
     };
 
@@ -355,7 +378,7 @@ export default function FileBrowser() {
             }
 
             // Escape - close modals or clear selection
-            if (e.key === 'Escape') {
+            if (e.key === '退出') {
                 if (previewFile) setPreviewFile(null);
                 else if (showNewFolder) setShowNewFolder(false);
                 else if (moveItems) setMoveItems(null);
@@ -372,7 +395,7 @@ export default function FileBrowser() {
             }
 
             // Delete - delete selected
-            if (e.key === 'Delete' && (selectedFileIds.size > 0 || selectedFolderIds.size > 0)) {
+            if (e.key === '删除' && (selectedFileIds.size > 0 || selectedFolderIds.size > 0)) {
                 e.preventDefault();
                 const selectedFiles = displayFiles?.filter(f => selectedFileIds.has(f.id)) || [];
                 const selectedFolders = folders?.filter(f => selectedFolderIds.has(f.id)) || [];
@@ -394,7 +417,7 @@ export default function FileBrowser() {
             }
 
             // Backspace - go to parent folder
-            if (e.key === 'Backspace' && breadcrumbs.length > 1) {
+            if (e.key === '退格' && breadcrumbs.length > 1) {
                 navigateToBreadcrumb(breadcrumbs.length - 2);
             }
 
@@ -485,7 +508,7 @@ export default function FileBrowser() {
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-dark-500" />
                             <input
                                 type="text"
-                                placeholder="Search..."
+                                placeholder="搜索…"
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
                                 className="w-full bg-dark-800/50 border border-white/[0.06] rounded-lg pl-9 pr-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary-500/50 focus:bg-dark-800 transition-all"
@@ -521,7 +544,7 @@ export default function FileBrowser() {
                         <div className="hidden md:flex items-center bg-dark-800/50 rounded-lg p-0.5 border border-white/[0.06] mr-2">
                              <button
                                 onClick={() => setFileTypeFilter(null)}
-                                title="All Files"
+                                title="全部文件"
                                 className={`p-1.5 rounded-md transition-all ${
                                     !fileTypeFilter ? 'bg-primary-600 text-white shadow-sm' : 'text-dark-400 hover:text-white hover:bg-white/[0.05]'
                                 }`}
@@ -530,7 +553,7 @@ export default function FileBrowser() {
                             </button>
                             <button
                                 onClick={() => setFileTypeFilter('video')}
-                                title="Videos"
+                                title="视频"
                                 className={`p-1.5 rounded-md transition-all ${
                                     fileTypeFilter === 'video' ? 'bg-primary-600 text-white shadow-sm' : 'text-dark-400 hover:text-white hover:bg-white/[0.05]'
                                 }`}
@@ -539,7 +562,7 @@ export default function FileBrowser() {
                             </button>
                             <button
                                 onClick={() => setFileTypeFilter('audio')}
-                                title="Audio"
+                                title="音频"
                                 className={`p-1.5 rounded-md transition-all ${
                                     fileTypeFilter === 'audio' ? 'bg-primary-600 text-white shadow-sm' : 'text-dark-400 hover:text-white hover:bg-white/[0.05]'
                                 }`}
@@ -548,7 +571,7 @@ export default function FileBrowser() {
                             </button>
                             <button
                                 onClick={() => setFileTypeFilter('image')}
-                                title="Images"
+                                title="图片"
                                 className={`p-1.5 rounded-md transition-all ${
                                     fileTypeFilter === 'image' ? 'bg-primary-600 text-white shadow-sm' : 'text-dark-400 hover:text-white hover:bg-white/[0.05]'
                                 }`}
@@ -557,7 +580,7 @@ export default function FileBrowser() {
                             </button>
                             <button
                                 onClick={() => setFileTypeFilter('document')}
-                                title="Documents"
+                                title="文档"
                                 className={`p-1.5 rounded-md transition-all ${
                                     fileTypeFilter === 'document' ? 'bg-primary-600 text-white shadow-sm' : 'text-dark-400 hover:text-white hover:bg-white/[0.05]'
                                 }`}
@@ -571,7 +594,7 @@ export default function FileBrowser() {
                                  onClick={handleRefresh}
                                  disabled={isLoading}
                                  className={`p-1.5 rounded-md text-dark-400 hover:text-white hover:bg-white/[0.05] transition-all active:scale-95 ${isLoading ? 'animate-spin' : ''}`}
-                                 title="Refresh"
+                                 title="刷新"
                              >
                                  <RefreshCw className="w-4 h-4" />
                              </button>
@@ -588,14 +611,31 @@ export default function FileBrowser() {
                              >
                                  <List className="w-4 h-4" />
                              </button>
+                             <div className="w-px h-3 bg-white/[0.1] mx-1"></div>
+                             <select
+                                 value={`${sortBy}-${sortDir}`}
+                                 onChange={(e) => {
+                                     const [by, dir] = e.target.value.split('-');
+                                     setSortBy(by as 'date' | 'name' | 'size');
+                                     setSortDir(dir as 'asc' | 'desc');
+                                 }}
+                                 title="排序方式"
+                                 className="bg-transparent text-[11px] text-dark-300 outline-none cursor-pointer pr-1"
+                             >
+                                 <option value="date-desc" className="bg-dark-800">最新优先</option>
+                                 <option value="date-asc" className="bg-dark-800">最早优先</option>
+                                 <option value="name-asc" className="bg-dark-800">名称 A→Z</option>
+                                 <option value="name-desc" className="bg-dark-800">名称 Z→A</option>
+                                 <option value="size-desc" className="bg-dark-800">大小 大→小</option>
+                                 <option value="size-asc" className="bg-dark-800">大小 小→大</option>
+                             </select>
                          </div>
 
 
                         {clipboard && (clipboard.files.length > 0 || clipboard.folders.length > 0) && (
                             <button
                                 onClick={handlePaste}
-                                className="ml-2 btn-secondary py-1.5 px-3 text-xs flex items-center gap-2 bg-primary-500/10 text-primary-300 border-primary-500/20 hover:bg-primary-500/20"
-                            >
+                                className="ml-2 btn-secondary py-1.5 px-3 text-xs flex items-center gap-2 bg-primary-500/10 text-primary-300 border-primary-500/20 hover:bg-primary-500/20" data-admin-only="1">
                                 <Clipboard className="w-3.5 h-3.5" />
                                 Paste ({clipboard.files.length + clipboard.folders.length})
                             </button>
@@ -604,10 +644,9 @@ export default function FileBrowser() {
                         {activeSection === 'files' && (
                             <button
                                 onClick={() => setShowNewFolder(true)}
-                                className="ml-2 btn-primary py-1.5 px-3 text-sm flex items-center gap-2 shadow-lg shadow-primary-500/20"
-                            >
+                                className="ml-2 btn-primary py-1.5 px-3 text-sm flex items-center gap-2 shadow-lg shadow-primary-500/20" data-admin-only="1">
                                 <FolderPlus className="w-4 h-4" />
-                                <span className="hidden sm:inline">New Folder</span>
+                                <span className="hidden sm:inline">新建文件夹</span>
                             </button>
                         )}
                     </div>
@@ -669,9 +708,9 @@ export default function FileBrowser() {
                                     <div className="w-24 h-24 rounded-3xl bg-dark-800/50 flex items-center justify-center border border-white/[0.04] mb-6 shadow-2xl">
                                         <ArrowUp className="w-10 h-10 text-dark-600 animate-bounce" />
                                     </div>
-                                    <h3 className="text-xl font-bold text-white mb-2">No files found</h3>
+                                    <h3 className="text-xl font-bold text-white mb-2">没有找到文件</h3>
                                     <p className="text-dark-400 max-w-xs">
-                                        Upload files by sending them to the Telegram bot
+                                        通过向 Telegram 机器人发送文件来上传
                                     </p>
                                 </div>
                             )}
@@ -701,7 +740,7 @@ export default function FileBrowser() {
                     {/* No more files message */}
                     {activeSection === 'files' && !hasMore && allFiles.length > 0 && (
                         <div className="text-center py-4 text-dark-400">
-                            No more files
+                            没有更多文件
                         </div>
                     )}
                 </div>
@@ -728,6 +767,9 @@ export default function FileBrowser() {
                 <DeleteConfirmModal
                     type={deleteConfirm.type}
                     count={deleteConfirm.items.length}
+                    fileCount={deleteConfirm.type === 'folder' && deleteConfirm.items.length === 1
+                        ? (deleteConfirm.items[0] as Folder).file_count
+                        : undefined}
                     name={deleteConfirm.items.length === 1 
                         ? (deleteConfirm.type === 'file' ? (deleteConfirm.items[0] as TelegramFile).file_name : (deleteConfirm.items[0] as Folder).name)
                         : undefined

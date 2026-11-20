@@ -31,18 +31,19 @@ export default function MoveFileModal({ items, onClose }: MoveFileModalProps) {
                 // Prevent moving folder into itself
                 const folderIds = items.folders.map(f => f.id);
                 if (selectedId && folderIds.includes(selectedId)) {
-                    addToast('Cannot move a folder into itself', 'error');
+                    addToast('不能把文件夹移动到它自己内部', 'error');
                     return;
                 }
                 promises.push(moveFolders({ ids: folderIds, folderId: selectedId }));
             }
 
             await Promise.all(promises);
-            addToast(`Moved ${totalItems} item(s) successfully`);
+            addToast(`已移动 ${totalItems} 项`);
             clearSelection();
             onClose();
-        } catch (error) {
-            addToast('Failed to move items', 'error');
+        } catch (error: any) {
+            const msg = error?.response?.data?.detail || '移动失败';
+            addToast(typeof msg === 'string' ? msg : '移动失败', 'error');
         }
     };
 
@@ -50,14 +51,14 @@ export default function MoveFileModal({ items, onClose }: MoveFileModalProps) {
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
             <div className="glass-card w-full max-w-md p-6 animate-scale-in">
                 <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-lg font-semibold">Move {totalItems} Item{totalItems !== 1 ? 's' : ''}</h2>
+                    <h2 className="text-lg font-semibold">移动 {totalItems} 项</h2>
                     <button onClick={onClose} className="p-1 hover:bg-dark-700 rounded">
                         <X className="w-5 h-5" />
                     </button>
                 </div>
 
                 <p className="text-sm text-dark-400 mb-4 truncate">
-                    Select destination folder
+                    选择目标文件夹
                 </p>
 
                 <div className="bg-dark-800 rounded-lg max-h-64 overflow-y-auto mb-4 custom-scrollbar">
@@ -68,11 +69,11 @@ export default function MoveFileModal({ items, onClose }: MoveFileModalProps) {
                             }`}
                     >
                         <Home className="w-4 h-4" />
-                        <span>Root (No folder)</span>
+                        <span>根目录（无文件夹）</span>
                     </button>
 
                     {isLoading ? (
-                        <div className="p-4 text-center text-dark-400">Loading...</div>
+                        <div className="p-4 text-center text-dark-400">加载中…</div>
                     ) : (
                         folderTree?.map((folder) => (
                             <FolderTreeItem
@@ -91,7 +92,7 @@ export default function MoveFileModal({ items, onClose }: MoveFileModalProps) {
                         onClick={onClose}
                         className="px-4 py-2 text-dark-400 hover:text-white transition-colors"
                     >
-                        Cancel
+                        取消
                     </button>
                     <button
                         onClick={handleMove}
@@ -101,10 +102,10 @@ export default function MoveFileModal({ items, onClose }: MoveFileModalProps) {
                         {isPending ? (
                             <>
                                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                Moving...
+                                移动中…
                             </>
                         ) : (
-                            'Move Here'
+                            '移到这里'
                         )}
                     </button>
                 </div>
@@ -119,7 +120,7 @@ function FolderTreeItem({ folder, selectedId, onSelect, depth }: {
     onSelect: (id: number) => void;
     depth: number;
 }) {
-    const [expanded, setExpanded] = useState(true);
+    const [expanded, setExpanded] = useState(false);  // 默认折叠，只展开用户点开的层级
     const hasChildren = folder.children && folder.children.length > 0;
 
     return (

@@ -518,7 +518,13 @@ async def handle_file(client, message: Message):
         file_type = "audio"
     elif message.document:
         media = message.document
-        file_type = "document"
+        _mt = getattr(media, "mime_type", "") or ""
+        if _mt.startswith("video/"):
+            file_type = "video"
+        elif _mt.startswith("audio/"):
+            file_type = "audio"
+        else:
+            file_type = "document"
     elif message.photo:
         return await message.reply("❌ Photos are not supported yet.")
     else:
