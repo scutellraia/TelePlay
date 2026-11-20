@@ -571,8 +571,8 @@
     </div>
     <div class="row" style="margin-top:10px">
       <div style="flex:1;min-width:240px">
-        <div class="muted" style="margin-bottom:6px">BT 下载完成后默认存入的文件夹（名称或 ID，留空=根目录）</div>
-        <input type="text" id="aria2Folder" placeholder="例如 凡人修仙传 或 2" />
+        <div class="muted" style="margin-bottom:6px">BT 下载完成后默认存入的文件夹</div>
+        <select id="aria2Folder" style="min-width:220px"></select>
       </div>
       <button id="btnSaveSettings">保存</button>
     </div>
@@ -1218,7 +1218,26 @@ async function loadSettings(){
     if (choices.indexOf(cur) === -1) choices.push(cur);
     choices.sort((a,b) => a - b);
     sel.innerHTML = choices.map(v => '<option value="' + v + '"' + (v === cur ? ' selected' : '') + '>' + labelFor(v) + '</option>').join('');
-    var af = document.getElementById('aria2Folder'); if (af) af.value = s.aria2_folder || '';
+    var af = document.getElementById('aria2Folder');
+    if (af) {
+      var raw = String(s.aria2_folder || '').trim();
+      var opts = ['<option value="">根目录</option>'];
+      var matched = !raw;
+      try {
+        var fd = await api('/up/api/folders');
+        var fl = (fd && fd.folders) || [];
+        for (var fi = 0; fi < fl.length; fi++) {
+          var f = fl[fi];
+          opts.push('<option value="' + f.id + '">' + (f.name || ('#' + f.id)) + '</option>');
+          if (raw && (String(f.id) === raw || f.name === raw)) matched = true;
+        }
+      } catch (e) {}
+      if (raw && !matched) {
+        opts.push('<option value="__bad__">⚠ 无效配置：' + raw + '（请重新选择）</option>');
+      }
+      af.innerHTML = opts.join('');
+      af.value = (raw && matched) ? raw : (raw ? '__bad__' : '');
+    }
     var ss = document.getElementById('syncSel');
     if (ss) {
       var scur = Number(s.sync_interval_seconds || 0);
@@ -1252,7 +1271,10 @@ $('btnSaveSettings').onclick = async () => {
   try {
     await api('/up/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ reconcile_seconds: value,
-        aria2_folder: (document.getElementById('aria2Folder').value || '').trim(),
+        aria2_folder: (function () {
+          var v = (document.getElementById('aria2Folder').value || '').trim();
+          return v === '__bad__' ? '' : v;
+        })(),
         sync_interval_seconds: Number((document.getElementById('syncSel') || {}).value || 0) }) });
     toast('已保存：' + labelFor(value) + '，立即生效'); loadSettings();
   } catch (e) { toast('保存失败：' + e.message); }
