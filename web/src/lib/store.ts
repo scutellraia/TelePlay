@@ -38,6 +38,9 @@ interface AppState {
 
     previewDoc: TelegramFile | null;
     setPreviewDoc: (file: TelegramFile | null) => void;
+    // 打开查看器那一刻，文件列表“当前排序结果”的快照；查看器据此按同样顺序前后翻页
+    previewList: TelegramFile[];
+    setPreviewList: (files: TelegramFile[]) => void;
 
     renameFile: TelegramFile | null;
     setRenameFile: (file: TelegramFile | null) => void;
@@ -153,7 +156,9 @@ export const useAppStore = create<AppState>((set) => ({
     previewFile: null,
     setPreviewFile: (file) => set({ previewFile: file }),
     previewDoc: null,
-    setPreviewDoc: (file) => set({ previewDoc: file }),
+    setPreviewDoc: (file) => set({ previewDoc: file, ...(file ? {} : { previewList: [] }) }),
+    previewList: [],
+    setPreviewList: (files) => set({ previewList: files || [] }),
 
     renameFile: null,
     setRenameFile: (file) => set({ renameFile: file }),

@@ -11,17 +11,18 @@ import { authToken, useFiles } from '../lib/api';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 export default function DocViewer() {
-    const { previewDoc, setPreviewDoc, currentFolderId } = useAppStore();
+    const { previewDoc, setPreviewDoc, currentFolderId, previewList } = useAppStore();
     const file = previewDoc;
-    // 只有真正打开预览时才拉列表：全局挂载时若未登录触发 401 会被拦截器跳转，形成刷新循环
-    const { data } = useFiles(previewDoc ? currentFolderId : undefined, undefined, undefined, 1, !!previewDoc);
+    // 只有真正打开预览、且没有“排序快照”时才拉列表：全局挂载时若无条件请求，401 会被拦截器跳转成刷新循环
+    const needFetch = !!previewDoc && previewList.length === 0;
+    const { data } = useFiles(needFetch ? currentFolderId : undefined, undefined, undefined, 1, needFetch);
 
-    // 当前文件夹里的图片列表（用于左右切换）
+    // 图片列表优先用文件列表当前排序结果的快照，保证“第一张 / 前后张”与用户在列表里看到的顺序一致
     const images = useMemo(
-        () => (data?.files || []).filter(
+        () => (previewList.length ? previewList : (data?.files || [])).filter(
             (f) => f.file_type === 'image' || (f.mime_type || '').toLowerCase().startsWith('image/'),
         ),
-        [data],
+        [previewList, data],
     );
     const idx = useMemo(
         () => (file ? images.findIndex((f) => f.id === file.id) : -1),

@@ -35,6 +35,7 @@ export default function FileBrowser() {
         previewFile,
         setPreviewFile,
         setPreviewDoc,
+    setPreviewList,
         showNewFolder,
         setShowNewFolder,
         moveItems,
@@ -353,6 +354,8 @@ export default function FileBrowser() {
         if (file.file_type === 'video' || file.file_type === 'audio') {
             setPreviewFile(file);
         } else if (isImage || isPdf) {
+            // 把当前排序后的列表快照交给查看器，保证“第一张/前后张”与页面顺序一致
+            setPreviewList((displayFiles || []).slice());
             setPreviewDoc(file);
         }
     };
