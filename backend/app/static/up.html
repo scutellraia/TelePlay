@@ -1396,6 +1396,41 @@ function setPausedUI(paused){
   if (r) r.style.display = paused ? '' : 'none';
 }
 
+// —— 服务器空间不足（507）时的自动暂停 / 恢复 ——
+function setSpaceHint(text){
+  var hint = document.getElementById('stopHint');
+  if (hint) hint.textContent = text || '';
+  var pct = document.getElementById('upPct');
+  if (pct) pct.textContent = text || '';
+}
+async function serverDisk(){
+  try {
+    var t = token();
+    var r = await fetch('/up/api/status', { headers: t ? { 'Authorization': 'Bearer ' + t } : {} });
+    if (!r.ok) return null;
+    var d = await r.json();
+    return d && d.disk ? d.disk : null;
+  } catch (e) { return null; }
+}
+async function waitForServerSpace(){
+  var waited = false;
+  while (true) {
+    var disk = await serverDisk();
+    if (disk) {
+      var free = Number(disk.free || 0), min = Number(disk.min_free || 0), margin = Number(disk.resume_margin || 0);
+      // 恢复到「阈值 + 余量」以上才继续，避免在临界点反复暂停
+      if (!min || free >= min + margin) {
+        if (waited) { setSpaceHint(''); toast('服务器空间已恢复，继续上传'); }
+        return;
+      }
+      waited = true;
+      setSpaceHint('服务器空间不足（剩余 ' + fmtSize(free) + '），已自动暂停，等待恢复到 '
+                   + fmtSize(min + margin) + ' 以上…');
+    }
+    await new Promise(function(r){ setTimeout(r, 15000); });
+  }
+}
+
 async function uploadOne(file, path, onProgress, sha256){
   const folder = (document.getElementById('upFolder').value || '').trim();
   const name = (path || file.name).split('/').pop();
@@ -1466,6 +1501,8 @@ async function uploadOne(file, path, onProgress, sha256){
       // 恢复后按服务器已收字节重算起点（暂停时那一块可能只传了一半）
       base = await askOffset();
     }
+    // 空间不足时先等，避免白发一个必定被 507 的请求
+    await waitForServerSpace();
     const blob = base > 0 ? file.slice(base) : file;
     const url = '/up/api/upload/raw?name=' + encodeURIComponent(name) + folderQs + relQs +
                 '&key=' + encodeURIComponent(key) + '&offset=' + base + '&size=' + file.size;
@@ -1497,6 +1534,12 @@ async function uploadOne(file, path, onProgress, sha256){
       throw new Error('401');
     }
     if (res.status === 409) {          // 偏移对不上：重新查询后继续
+      base = await askOffset();
+      continue;
+    }
+    if (res.status === 507) {         // 服务器空间不足：暂停，等空间恢复后自动续传
+      setSpaceHint('服务器空间不足，已自动暂停…');
+      await waitForServerSpace();
       base = await askOffset();
       continue;
     }
@@ -1980,6 +2023,7 @@ async function loadKeys(){
 
 refreshStatus(); refreshTasks(); refreshProcessed(); refreshFailed(); refreshQueue(); loadSettings(); loadKeys(); loadFolderOptions();
 setInterval(refreshQueue, 1000);
+setInterval(refreshFailed, 10000);  // 失败列表每 10 秒自动刷新
   clearInterval(window._t1); clearInterval(window._t2); clearInterval(window._t3);
   window._t1 = setInterval(refreshServer, 1000);
   window._t2 = setInterval(refreshStatus, 5000);

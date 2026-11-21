@@ -58,6 +58,40 @@ ARIA2_RPC_URL = os.environ.get("ARIA2_RPC_URL", "http://aria2:6800/jsonrpc")
 ARIA2_RPC_SECRET = os.environ.get("ARIA2_RPC_SECRET", "")
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
 UPLOAD_TMP_DIR = Path(os.environ.get("UPLOAD_TMP_DIR", "/tmp/tp-uploads"))
+
+# 上传临时目录所在文件系统至少留出的剩余空间；低于等于该值就拒收新上传（507）
+MIN_FREE_BYTES = int(os.environ.get("UP_MIN_FREE_BYTES", str(5 * 1024 ** 3)))
+# 恢复上传时需要比阈值多出的余量，避免在阈值附近频繁暂停/恢复
+RESUME_MARGIN_BYTES = int(os.environ.get("UP_RESUME_MARGIN_BYTES", str(1024 ** 3)))
+
+
+def _upload_free_bytes() -> int:
+    """上传临时目录所在文件系统的可用字节数。"""
+    try:
+        st = os.statvfs(str(UPLOAD_TMP_DIR))
+        return int(st.f_bavail) * int(st.f_frsize)
+    except OSError:
+        try:
+            return int(shutil.disk_usage(str(UPLOAD_TMP_DIR)).free)
+        except OSError:
+            return 0
+
+
+def _ensure_upload_space() -> int:
+    """空间不足时抛 507，前端据此自动暂停；返回当前可用字节数。"""
+    free = _upload_free_bytes()
+    if free <= MIN_FREE_BYTES:
+        logger.warning("rejecting upload: free=%d <= min=%d", free, MIN_FREE_BYTES)
+        raise HTTPException(
+            status_code=507,
+            detail={
+                "message": "insufficient storage",
+                "free": free,
+                "min_free": MIN_FREE_BYTES,
+            },
+        )
+    return free
+
 STATE_FILE = Path(os.environ.get("UP_STATE_FILE", "/tmp/tp-up-state.json"))
 STATUS_FILE = Path(os.environ.get("UP_STATUS_FILE", "/app/status/status.json"))
 STATUS_MAX_AGE = int(os.environ.get("UP_STATUS_MAX_AGE", "30"))
@@ -1395,6 +1429,8 @@ async def up_status(token: str = Depends(require_session)):
             "total": usage.total,
             "used": usage.used,
             "free": usage.free,
+            "min_free": MIN_FREE_BYTES,
+            "resume_margin": RESUME_MARGIN_BYTES,
             "downloads_bytes": _dir_size(DOWNLOAD_DIR) if DOWNLOAD_DIR.exists() else 0,
         },
         "limits": {"max_upload_bytes": MAX_UPLOAD_BYTES},
@@ -1869,6 +1905,9 @@ async def up_upload(
 RESUME_DIR = UPLOAD_TMP_DIR / ".resume"
 RESUME_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
+# 同一个 key 同时只允许一个写入者：并发写会把 .part 写乱（大小对、内容错）
+_RESUME_INFLIGHT: set = set()
+
 
 @router.get("/api/upload/resume")
 async def up_upload_resume(key: str = Query(...), token: str = Depends(require_write_auth)):
@@ -1927,6 +1966,22 @@ async def _handle_resume(raw_request, key, offset, size, name, folder_id, claime
         raise HTTPException(status_code=400, detail="size is required for resumable uploads")
     RESUME_DIR.mkdir(parents=True, exist_ok=True)
     part = RESUME_DIR / (key + ".part")
+    if key in _RESUME_INFLIGHT:
+        current = part.stat().st_size if part.is_file() else 0
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "another upload is writing this key", "received": current},
+        )
+    _RESUME_INFLIGHT.add(key)
+    try:
+        return await _handle_resume_locked(
+            raw_request, key, part, offset, size, name, folder_id, claimed, wait
+        )
+    finally:
+        _RESUME_INFLIGHT.discard(key)
+
+
+async def _handle_resume_locked(raw_request, key, part, offset, size, name, folder_id, claimed, wait):
     current = part.stat().st_size if part.is_file() else 0
     if offset > current:
         raise HTTPException(
@@ -1983,6 +2038,7 @@ async def up_upload_raw(
     token: str = Depends(require_write_auth),
     db: AsyncSession = Depends(get_db),
 ):
+    _ensure_upload_space()
     folder_id = await _resolve_folder_id(db, folder, bool(create_folder))
     if relpath:
         folder_id = await _ensure_relpath(db, folder_id, relpath)
