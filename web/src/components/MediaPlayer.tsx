@@ -5,9 +5,10 @@ import { useRef, useEffect, useState, useCallback } from 'react';
 import { X, Play, Pause, Volume2, VolumeX, Maximize, Minimize, SkipBack, SkipForward, Download, ExternalLink, AlertTriangle, Copy, PictureInPicture2, Gauge, ChevronDown, ChevronUp } from 'lucide-react';
 import { TelegramFile, formatDuration, useUpdateProgress, useFile, api, authToken } from '../lib/api';
 import { useAppStore } from '../lib/store';
+import { copyText } from '../lib/clipboard';
 
 export default function MediaPlayer() {
-    const { previewFile: file, setPreviewFile, isPlayerMinimized, setPlayerMinimized } = useAppStore();
+    const { previewFile: file, setPreviewFile, isPlayerMinimized, setPlayerMinimized, addToast } = useAppStore();
     
     if (!file) return null;
 
@@ -346,7 +347,11 @@ function MediaPlayerContent({ file, onClose, isMinimized, setMinimized }: MediaP
                             </a>
                             <div className="flex gap-3">
                                 <Button
-                                    onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(externalUrl); }}
+                                    onClick={async (e) => {
+                                        e.stopPropagation();
+                                        const ok = await copyText(externalUrl);
+                                        addToast(ok ? '链接已复制' : '复制失败，请手动复制', ok ? 'success' : 'error');
+                                    }}
                                     className="flex-1 btn-secondary flex items-center justify-center gap-2"
                                 >
                                     <Copy className="w-4 h-4" />

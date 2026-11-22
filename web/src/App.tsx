@@ -55,9 +55,11 @@ function AuthCallback() {
                     <div className="mt-4 p-4 bg-dark-800 rounded-lg text-left">
                         <p className="text-dark-400 text-sm mb-2">Token received (click to copy):</p>
                         <button
-                            onClick={() => {
-                                navigator.clipboard.writeText(token);
-                                setStatus('Token copied! Open browser DevTools console and run:\nlocalStorage.setItem("access_token", "paste-token-here")');
+                            onClick={async () => {
+                                const ok = await copyText(token);
+                                setStatus(ok
+                                    ? 'Token copied! Open browser DevTools console and run:\nlocalStorage.setItem("access_token", "paste-token-here")'
+                                    : '复制失败：浏览器不允许访问剪贴板，请手动选中复制');
                             }}
                             className="text-xs text-primary-400 break-all text-left hover:text-primary-300"
                         >
@@ -314,6 +316,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 import MediaPlayer from './components/MediaPlayer';
 import DocViewer from './components/DocViewer';
+import { copyText } from './lib/clipboard';
 
 function App() {
     return (

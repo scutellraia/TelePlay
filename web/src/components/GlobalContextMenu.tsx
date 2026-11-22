@@ -3,9 +3,10 @@ import { useAppStore } from '../lib/store';
 import { useQueryClient } from '@tanstack/react-query';
 import { TelegramFile, Folder, api, authToken } from '../lib/api';
 import { Play, Download, Link, Edit, FolderInput, Trash2, Globe, ShieldOff, HardDriveDownload, Lock } from 'lucide-react';
+import { copyText } from '../lib/clipboard';
 
 export default function GlobalContextMenu() {
-    const { activeContextMenu, setActiveContextMenu, setPreviewFile, setMoveItems, setMoveFiles, setDeleteConfirm, setRenameFile, setRenameFolder, selectedFileIds, selectedFiles } = useAppStore();
+    const { activeContextMenu, setActiveContextMenu, setPreviewFile, setMoveItems, setMoveFiles, setDeleteConfirm, setRenameFile, setRenameFolder, selectedFileIds, selectedFiles, addToast } = useAppStore();
     const menuRef = useRef<HTMLDivElement>(null);
     const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -100,12 +101,12 @@ export default function GlobalContextMenu() {
     };
 
     const handleCopy = async (text: string, id: string) => {
-        try {
-            await navigator.clipboard.writeText(text);
+        const ok = await copyText(text);
+        if (ok) {
             setCopiedId(id);
             setTimeout(() => setCopiedId(null), 2000);
-        } catch (err) {
-            console.error('复制失败：', err);
+        } else {
+            addToast('复制失败：浏览器不允许访问剪贴板，请手动选中复制', 'error');
         }
     };
 
