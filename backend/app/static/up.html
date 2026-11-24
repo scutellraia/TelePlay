@@ -1403,31 +1403,47 @@ function setSpaceHint(text){
   var pct = document.getElementById('upPct');
   if (pct) pct.textContent = text || '';
 }
-async function serverDisk(){
-  try {
-    var t = token();
-    var r = await fetch('/up/api/status', { headers: t ? { 'Authorization': 'Bearer ' + t } : {} });
-    if (!r.ok) return null;
-    var d = await r.json();
-    return d && d.disk ? d.disk : null;
-  } catch (e) { return null; }
+var spaceState = { paused:false, free:0, min:0, resumeAt:0, version:-1 };
+
+function spaceHintText(){
+  if (!spaceState.paused) return '';
+  return '服务器空间不足（剩余 ' + fmtSize(spaceState.free) + '），服务端已发出暂停信号，恢复到 '
+       + fmtSize(spaceState.resumeAt) + ' 后自动继续…';
 }
-async function waitForServerSpace(){
-  var waited = false;
+// 长轮询服务端空间信号：≤5GiB 服务端发 pause（这里立即停并发 XHR），≥6GiB 发 resume
+async function spaceSignalLoop(){
   while (true) {
-    var disk = await serverDisk();
-    if (disk) {
-      var free = Number(disk.free || 0), min = Number(disk.min_free || 0), margin = Number(disk.resume_margin || 0);
-      // 恢复到「阈值 + 余量」以上才继续，避免在临界点反复暂停
-      if (!min || free >= min + margin) {
-        if (waited) { setSpaceHint(''); toast('服务器空间已恢复，继续上传'); }
-        return;
+    try {
+      var t = token();
+      var r = await fetch('/up/api/space-wait?version=' + spaceState.version,
+                          { headers: t ? { 'Authorization': 'Bearer ' + t } : {} });
+      if (r.ok) {
+        var d = await r.json();
+        var wasPaused = spaceState.paused;
+        spaceState.paused = !!d.paused;
+        spaceState.free = Number(d.free || 0);
+        spaceState.min = Number(d.min_free || 0);
+        spaceState.resumeAt = Number(d.resume_at || 0);
+        spaceState.version = Number(d.version || 0);
+        if (spaceState.paused && !wasPaused) {
+          setSpaceHint(spaceHintText());
+          try { abortAllXhrs(); } catch (e) {}
+          toast('服务器空间不足，已按服务端信号暂停上传');
+        } else if (!spaceState.paused) {
+          setSpaceHint('');
+          if (wasPaused) toast('服务器空间已恢复，继续上传');
+        } else {
+          setSpaceHint(spaceHintText());
+        }
       }
-      waited = true;
-      setSpaceHint('服务器空间不足（剩余 ' + fmtSize(free) + '），已自动暂停，等待恢复到 '
-                   + fmtSize(min + margin) + ' 以上…');
-    }
-    await new Promise(function(r){ setTimeout(r, 15000); });
+    } catch (e) {}
+    await new Promise(function(res){ setTimeout(res, 1000); });
+  }
+}
+async function waitUploadAllowed(){
+  while (spaceState.paused) {
+    setSpaceHint(spaceHintText());
+    await new Promise(function(res){ setTimeout(res, 1000); });
   }
 }
 
@@ -1501,8 +1517,8 @@ async function uploadOne(file, path, onProgress, sha256){
       // 恢复后按服务器已收字节重算起点（暂停时那一块可能只传了一半）
       base = await askOffset();
     }
-    // 空间不足时先等，避免白发一个必定被 507 的请求
-    await waitForServerSpace();
+    // 只服从服务端信号：处于暂停状态就先等，不本地预估空间
+    await waitUploadAllowed();
     const blob = base > 0 ? file.slice(base) : file;
     const url = '/up/api/upload/raw?name=' + encodeURIComponent(name) + folderQs + relQs +
                 '&key=' + encodeURIComponent(key) + '&offset=' + base + '&size=' + file.size;
@@ -1538,8 +1554,9 @@ async function uploadOne(file, path, onProgress, sha256){
       continue;
     }
     if (res.status === 507) {         // 服务器空间不足：暂停，等空间恢复后自动续传
-      setSpaceHint('服务器空间不足，已自动暂停…');
-      await waitForServerSpace();
+      spaceState.paused = true;
+      setSpaceHint(spaceHintText());
+      await waitUploadAllowed();
       base = await askOffset();
       continue;
     }
@@ -2022,6 +2039,7 @@ async function loadKeys(){
 })();
 
 refreshStatus(); refreshTasks(); refreshProcessed(); refreshFailed(); refreshQueue(); loadSettings(); loadKeys(); loadFolderOptions();
+spaceSignalLoop();
 setInterval(refreshQueue, 1000);
 setInterval(refreshFailed, 10000);  // 失败列表每 10 秒自动刷新
   clearInterval(window._t1); clearInterval(window._t2); clearInterval(window._t3);

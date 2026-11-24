@@ -17,7 +17,9 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
     const logoutAllMutation = useLogoutAll();
 
     const handleLogout = () => {
-        localStorage.removeItem('access_token');
+        localStorage.removeItem('access_token')
+        localStorage.removeItem('admin_token_ls')
+        sessionStorage.removeItem('admin_token');
         localStorage.removeItem('refresh_token');
         localStorage.removeItem('user');
         window.location.href = '/login';

@@ -98,20 +98,39 @@ export const api = axios.create({
 });
 
 // 管理令牌放在 sessionStorage（由 /up 页面签发，关闭标签页即失效），统一从这里取
-export const authToken = (): string | null =>
-    sessionStorage.getItem('admin_token') || localStorage.getItem('access_token');
+// 管理令牌键名：sessionStorage 优先（同标签页），localStorage 兜底（WebView 整页跳转/关闭后仍可用）
+export const ADMIN_LS_KEY = 'admin_token_ls';
 
-export const isAdminSession = (): boolean => {
-    const t = sessionStorage.getItem('admin_token');
-    if (!t) return false;
+const decodeJwtPayload = (t: string): any => {
     try {
         const part = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-        const payload = JSON.parse(decodeURIComponent(escape(atob(part))));
-        return payload.scope === 'admin' && (!payload.exp || payload.exp * 1000 > Date.now());
+        return JSON.parse(decodeURIComponent(escape(atob(part))));
     } catch {
-        return false;
+        return null;
     }
 };
+
+const isUsableAdminToken = (t: string | null): boolean => {
+    if (!t) return false;
+    const payload = decodeJwtPayload(t);
+    if (!payload) return false;
+    return payload.scope === 'admin' && (!payload.exp || payload.exp * 1000 > Date.now());
+};
+
+export const adminToken = (): string | null => {
+    const sess = sessionStorage.getItem('admin_token');
+    if (isUsableAdminToken(sess)) return sess;
+    if (sess) sessionStorage.removeItem('admin_token');
+    const stored = localStorage.getItem(ADMIN_LS_KEY);
+    if (isUsableAdminToken(stored)) return stored;
+    if (stored) localStorage.removeItem(ADMIN_LS_KEY);   // 过期就清掉，避免反复带上失效令牌
+    return null;
+};
+
+export const authToken = (): string | null =>
+    adminToken() || localStorage.getItem('access_token');
+
+export const isAdminSession = (): boolean => !!adminToken();
 
 // Add auth token to requests
 api.interceptors.request.use((config) => {
@@ -155,6 +174,7 @@ api.interceptors.response.use(
             if (originalRequest.url.includes('/auth/refresh')) {
                 // Refresh token itself failed/expired - clear everything
                 localStorage.removeItem('access_token');
+                localStorage.removeItem(ADMIN_LS_KEY);
                 localStorage.removeItem('refresh_token');
                 localStorage.removeItem('user');
                 if (!onAuthPage()) window.location.href = '/login';
@@ -200,6 +220,7 @@ api.interceptors.response.use(
             } catch (err) {
                 processQueue(err, null);
                 localStorage.removeItem('access_token');
+                localStorage.removeItem(ADMIN_LS_KEY);
                 localStorage.removeItem('refresh_token');
                 localStorage.removeItem('user');
                 if (!onAuthPage()) window.location.href = '/login';
@@ -277,9 +298,9 @@ export const useVerifyLoginCode = () => {
 
 // ============== Files Hooks ==============
 
-export const useFiles = (folderId?: number | null, fileType?: string, search?: string, page = 1, enabled = true) => {
+export const useFiles = (folderId?: number | null, fileType?: string, search?: string, page = 1, enabled = true, perPage = 50) => {
     return useQuery({
-        queryKey: ['files', folderId, fileType, search, page],
+        queryKey: ['files', folderId, fileType, search, page, perPage],
         enabled,
         queryFn: async () => {
             const params: Record<string, any> = {};
@@ -287,7 +308,7 @@ export const useFiles = (folderId?: number | null, fileType?: string, search?: s
             if (fileType) params.file_type = fileType;
             if (search) params.search = search;
             params.page = page;
-            params.per_page = 50; // Load 50 files per page
+            params.per_page = perPage;
             const { data } = await api.get<FileListResponse>('/files', { params });
             return data;
         },
