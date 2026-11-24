@@ -289,15 +289,55 @@ def _part_files(out_dir, stem, suffix):
         return []
 
 
+async def _run_split(p, out_dir, suffix, duration, size, limit, container):
+    """按指定容器切分；返回分片列表（可能因仍有超大分片而抛错）。"""
+    import asyncio as _asyncio
+
+    for factor in (1.0, 0.90, 0.80, 0.65, 0.50, 0.35):
+        for old in _part_files(out_dir, p.stem, suffix):
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        seg_time = max(10, int(duration * (limit / size) * factor))
+        pattern = str(out_dir / (p.stem + ".part%03d" + suffix))
+        cmd = [
+            "ffmpeg", "-hide_banner", "-v", "error", "-i", str(p),
+            "-c", "copy", "-map", "0",
+            "-f", "segment", "-segment_format", container,
+            "-segment_time", str(seg_time), "-reset_timestamps", "1", pattern,
+        ]
+        proc = await _asyncio.create_subprocess_exec(
+            *cmd, stdout=_asyncio.subprocess.PIPE, stderr=_asyncio.subprocess.PIPE
+        )
+        _out, err = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError("ffmpeg failed: " + err.decode("utf-8", "ignore")[-400:])
+        parts = _part_files(out_dir, p.stem, suffix)
+        if not parts:
+            raise RuntimeError("ffmpeg produced no parts")
+        biggest = max(x.stat().st_size for x in parts)
+        logger.info(
+            "split %s -> %d parts (%s), biggest %.0f MB (factor %.2f, seg %ss)",
+            p.name, len(parts), container, biggest / 1048576.0, factor, seg_time,
+        )
+        if biggest < TELEGRAM_LIMIT_BYTES:
+            return parts
+    raise RuntimeError("splitting still produced an oversized part")
+
+
 async def split_video(path, limit_bytes=None):
     """Cut a video into playable parts, each below the telegram limit.
 
     Uses stream copy (no re-encode): fast, lossless. Segment length is derived
     from duration and size, and retried with a smaller factor if any part is
     still too big.
-    """
-    import asyncio as _asyncio  # local alias keeps the module import list tidy
 
+    Container fallback: mp4 first (best compatibility). Some sources carry data
+    tracks that MP4 cannot mux (e.g. QuickTime tmcd timecode -> "Could not find
+    tag for codec none in stream #N"), so on failure retry with a MOV container
+    which keeps those tracks.
+    """
     p = Path(path)
     limit = limit_bytes or SEGMENT_LIMIT_BYTES
     size = p.stat().st_size
@@ -306,37 +346,15 @@ async def split_video(path, limit_bytes=None):
         raise RuntimeError("cannot probe duration; refusing to split blindly")
 
     out_dir = p.parent
-    for factor in (1.0, 0.90, 0.80, 0.65, 0.50, 0.35):
-        for old in _part_files(out_dir, p.stem, p.suffix):
-            try:
-                old.unlink()
-            except OSError:
-                pass
-        seg_time = max(10, int(duration * (limit / size) * factor))
-        pattern = str(out_dir / (p.stem + ".part%03d" + p.suffix))
-        cmd = [
-            "ffmpeg", "-hide_banner", "-v", "error", "-i", str(p),
-            "-c", "copy", "-map", "0",
-            "-f", "segment", "-segment_time", str(seg_time),
-            "-reset_timestamps", "1", pattern,
-        ]
-        proc = await _asyncio.create_subprocess_exec(
-            *cmd, stdout=_asyncio.subprocess.PIPE, stderr=_asyncio.subprocess.PIPE
-        )
-        _out, err = await proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError("ffmpeg failed: " + err.decode("utf-8", "ignore")[-400:])
-        parts = _part_files(out_dir, p.stem, p.suffix)
-        if not parts:
-            raise RuntimeError("ffmpeg produced no parts")
-        biggest = max(x.stat().st_size for x in parts)
-        logger.info(
-            "split %s -> %d parts, biggest %.0f MB (factor %.2f, seg %ss)",
-            p.name, len(parts), biggest / 1048576.0, factor, seg_time,
-        )
-        if biggest < TELEGRAM_LIMIT_BYTES:
-            return parts
-    raise RuntimeError("splitting still produced an oversized part")
+    last_exc = None
+    for container in ("mp4", "mov"):
+        try:
+            return await _run_split(p, out_dir, "." + container, duration, size, limit, container)
+        except RuntimeError as exc:
+            last_exc = exc
+            logger.warning("split as %s failed (%s)%s", container, str(exc)[-200:],
+                           "; retrying with mov container" if container == "mp4" else "")
+    raise last_exc if last_exc else RuntimeError("splitting failed")
 
 
 async def upload_file_auto(path, telegram_id=None, folder_id=None, delete_after=True, progress_cb=None, sha256=None):
