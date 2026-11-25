@@ -59,10 +59,95 @@ ARIA2_RPC_SECRET = os.environ.get("ARIA2_RPC_SECRET", "")
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
 UPLOAD_TMP_DIR = Path(os.environ.get("UPLOAD_TMP_DIR", "/tmp/tp-uploads"))
 
+# Linux 单段文件名上限 255 字节；中文/日文每字符 3 字节，长标题很容易超限
+_FILENAME_MAX_BYTES = int(os.environ.get("UP_TMP_NAME_MAX_BYTES", "200"))
+
+
+def _fit_filename(name: str, max_bytes: int = 0) -> str:
+    """生成落盘用的文件名：超长时截断正文并追加 8 位哈希，保留扩展名。"""
+    limit = max_bytes or _FILENAME_MAX_BYTES
+    raw = Path(name or "upload.bin").name or "upload.bin"
+    if len(raw.encode("utf-8")) <= limit:
+        return raw
+    stem, dot, suffix = raw.rpartition(".")
+    if not dot or len(suffix) > 16:
+        stem, suffix, dot = raw, "", ""
+    tag = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+    tail = ("." + suffix) if dot else ""
+    budget = limit - len(tag) - 1 - len(tail.encode("utf-8"))
+    out, used = [], 0
+    for ch in stem:
+        b = len(ch.encode("utf-8"))
+        if used + b > budget:
+            break
+        out.append(ch)
+        used += b
+    return ("".join(out).strip() or "file") + "-" + tag + tail
+
 # 上传临时目录所在文件系统至少留出的剩余空间；低于等于该值就拒收新上传（507）
 MIN_FREE_BYTES = int(os.environ.get("UP_MIN_FREE_BYTES", str(5 * 1024 ** 3)))
 # 恢复上传时需要比阈值多出的余量，避免在阈值附近频繁暂停/恢复
 RESUME_MARGIN_BYTES = int(os.environ.get("UP_RESUME_MARGIN_BYTES", str(1024 ** 3)))
+
+# —— 服务端主动空间信号（≤5GiB 暂停、≥6GiB 继续）——
+_SPACE_LOCK = asyncio.Lock()
+_SPACE_STATE = {"paused": False, "free": 0, "version": 0}
+_SPACE_WAITERS: set = set()
+_SPACE_MONITOR_STARTED = False
+
+
+def _space_snapshot() -> dict:
+    return {
+        "paused": _SPACE_STATE["paused"],
+        "free": _SPACE_STATE["free"],
+        "min_free": MIN_FREE_BYTES,
+        "resume_at": MIN_FREE_BYTES + RESUME_MARGIN_BYTES,
+        "version": _SPACE_STATE["version"],
+    }
+
+
+def _space_broadcast() -> None:
+    """唤醒所有等待者（长轮询返回最新状态）。"""
+    snap = _space_snapshot()
+    for q in list(_SPACE_WAITERS):
+        try:
+            q.set_result(snap)
+        except Exception:  # noqa: BLE001
+            pass
+    _SPACE_WAITERS.clear()
+
+
+async def _space_monitor() -> None:
+    """每 5 秒检查一次：到红线发暂停，回到恢复线发继续。"""
+    global _SPACE_MONITOR_STARTED
+    _SPACE_MONITOR_STARTED = True
+    while True:
+        try:
+            free = _upload_free_bytes()
+            paused = _SPACE_STATE["paused"]
+            changed = False
+            if not paused and free <= MIN_FREE_BYTES:
+                _SPACE_STATE.update(paused=True, free=free)
+                changed = True
+                logger.warning("space signal: PAUSE (free=%d <= %d)", free, MIN_FREE_BYTES)
+            elif paused and free >= MIN_FREE_BYTES + RESUME_MARGIN_BYTES:
+                _SPACE_STATE.update(paused=False, free=free)
+                changed = True
+                logger.info("space signal: RESUME (free=%d >= %d)",
+                            free, MIN_FREE_BYTES + RESUME_MARGIN_BYTES)
+            else:
+                _SPACE_STATE["free"] = free
+            if changed:
+                _SPACE_STATE["version"] += 1
+                _space_broadcast()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("space monitor error: %s", exc)
+        await asyncio.sleep(5)
+
+
+def _ensure_space_monitor() -> None:
+    if not _SPACE_MONITOR_STARTED:
+        asyncio.ensure_future(_space_monitor())
 
 
 def _upload_free_bytes() -> int:
@@ -1083,9 +1168,12 @@ def _save_file_jobs(items):
         logger.warning("cannot write file jobs: %s", exc)
 
 
-def _remember_file_job(path, folder_id, size):
+def _remember_file_job(path, folder_id, size, name=None):
     items = [x for x in _load_file_jobs() if x.get("path") != str(path)]
-    items.append({"path": str(path), "folder_id": folder_id, "size": int(size or 0)})
+    items.append({
+        "path": str(path), "folder_id": folder_id, "size": int(size or 0),
+        "name": name or Path(str(path)).name,
+    })
     _save_file_jobs(items)
 
 
@@ -1096,33 +1184,34 @@ def _forget_file_job(path):
         _save_file_jobs(keep)
 
 
-async def enqueue_file_upload(path, folder_id, size=0, sha256=None):
+async def enqueue_file_upload(path, folder_id, size=0, sha256=None, display_name=None):
     """Queue a local file for the telegram upload worker (returns immediately)."""
     p = Path(str(path))
+    shown = display_name or p.name
     key = "file:" + str(p)
     folder = await _folder_name_by_id(folder_id)
     lane = _lane_for_size(size)
     _queue_view.append({
         "gid": key,
-        "name": p.name,
+        "name": shown,
         "size": int(size or 0),
         "folder": folder,
         "lane": lane,
     })
     _queued_gids.add(key)
     _active_uploads.add(str(p))
-    _remember_file_job(p, folder_id, size)
+    _remember_file_job(p, folder_id, size, shown)
     if sha256:
         _inflight_hashes[sha256] = key
     await _get_queue(lane).put((_next_seq(), {
         "path": str(p),
-        "name": p.name,
+        "name": shown,
         "folder_id": folder_id,
         "key": key,
         "lane": lane,
         "sha256": sha256,
     }))
-    logger.info("queued file %s (%.1f MB) for telegram upload", p.name, (size or 0) / 1048576.0)
+    logger.info("queued file %s (%.1f MB) for telegram upload", shown, (size or 0) / 1048576.0)
     return key
 
 
@@ -1130,6 +1219,7 @@ async def _process_file(item, lane):
     """Upload one queued local file (from the API or the web page)."""
     path = Path(str(item.get("path") or ""))
     name = item.get("name") or path.name
+    display_name = item.get("name") or path.name
     folder_id = item.get("folder_id")
     if not path.is_file():
         logger.warning("queued file %s vanished, skipping", name)
@@ -1140,7 +1230,7 @@ async def _process_file(item, lane):
         await upload_file_auto(
             str(path), folder_id=folder_id, delete_after=True,
             progress_cb=lambda cur, tot, _l=lane: _track_progress(_l, cur, tot),
-            sha256=item.get("sha256"),
+            sha256=item.get("sha256"), display_name=display_name,
         )
         logger.info("queued file %s uploaded to telegram", name)
     except Exception as exc:  # noqa: BLE001
@@ -1406,6 +1496,22 @@ async def up_page():
     )
 
 
+@router.get("/api/space-wait")
+async def up_space_wait(version: int = Query(default=-1), token: str = Depends(require_session)):
+    """长轮询：状态有变化（或超时 25 秒）就返回，客户端据此暂停/继续。"""
+    _ensure_space_monitor()
+    if version != _SPACE_STATE["version"]:
+        return _space_snapshot()
+    fut = asyncio.get_running_loop().create_future()
+    _SPACE_WAITERS.add(fut)
+    try:
+        return await asyncio.wait_for(fut, timeout=25)
+    except asyncio.TimeoutError:
+        _SPACE_WAITERS.discard(fut)
+        return _space_snapshot()
+    finally:
+        _SPACE_WAITERS.discard(fut)
+
 @router.get("/api/status")
 async def up_status(token: str = Depends(require_session)):
     try:
@@ -1425,6 +1531,7 @@ async def up_status(token: str = Depends(require_session)):
         "active": int(stat.get("numActive") or 0),
         "waiting": int(stat.get("numWaiting") or 0),
         "stopped": int(stat.get("numStopped") or 0),
+        "space": _space_snapshot(),
         "disk": {
             "total": usage.total,
             "used": usage.used,
@@ -1819,8 +1926,8 @@ async def up_upload(
         if duplicate is not None:
             return duplicate
     UPLOAD_TMP_DIR.mkdir(parents=True, exist_ok=True)
-    safe_name = Path(file.filename or "upload.bin").name
-    target = UPLOAD_TMP_DIR / safe_name
+    display_name = Path(file.filename or "upload.bin").name or "upload.bin"
+    target = UPLOAD_TMP_DIR / _fit_filename(display_name)
     written = 0
     _active_uploads.add(str(target))
     finished = False
@@ -1862,11 +1969,12 @@ async def up_upload(
                 }
         if wait:
             _wait_lane = _lane_for_size(written)
-            _start_active(_wait_lane, target.name, written, await _folder_name_by_id(folder_id))
+            _start_active(_wait_lane, display_name, written, await _folder_name_by_id(folder_id))
             try:
                 res = await upload_file_auto(
                     str(target), folder_id=folder_id, delete_after=True,
                     progress_cb=lambda cur, tot, _l=_wait_lane: _track_progress(_l, cur, tot),
+                    display_name=display_name,
                 )
             finally:
                 _stop_active(_wait_lane)
@@ -1877,13 +1985,14 @@ async def up_upload(
                 "file": (res["files"][0] if res["files"] else None),
                 "files": res["files"],
             }
-        queue_key = await enqueue_file_upload(target, folder_id, written, sha256=digest)
+        queue_key = await enqueue_file_upload(target, folder_id, written, sha256=digest,
+                                             display_name=display_name)
         finished = True
         return {
             "ok": True,
             "queued": True,
             "bytes": written,
-            "name": target.name,
+            "name": display_name,
             "folder_id": folder_id,
             "queue_key": queue_key,
         }
@@ -1919,7 +2028,7 @@ async def up_upload_resume(key: str = Query(...), token: str = Depends(require_w
     return {"ok": True, "key": key, "received": received, "exists": part.is_file()}
 
 
-async def _finish_resumed_upload(target, folder_id, written, digest, claimed, wait):
+async def _finish_resumed_upload(target, folder_id, written, digest, claimed, wait, display_name=None):
     """Same tail as a one-shot upload: dedupe then queue (or upload now)."""
     if digest and not claimed:
         existing = await hash_sync.find_by_hash(digest)
@@ -1938,12 +2047,12 @@ async def _finish_resumed_upload(target, folder_id, written, digest, claimed, wa
             }
     if wait:
         lane = _lane_for_size(written)
-        _start_active(lane, target.name, written, await _folder_name_by_id(folder_id))
+        _start_active(lane, display_name or target.name, written, await _folder_name_by_id(folder_id))
         try:
             res = await upload_file_auto(
                 str(target), folder_id=folder_id, delete_after=True,
                 progress_cb=lambda cur, tot, _l=lane: _track_progress(_l, cur, tot),
-                sha256=digest,
+                sha256=digest, display_name=display_name,
             )
         finally:
             _stop_active(lane)
@@ -1952,9 +2061,10 @@ async def _finish_resumed_upload(target, folder_id, written, digest, claimed, wa
             "file": (res["files"][0] if res["files"] else None),
             "files": res["files"],
         }
-    queue_key = await enqueue_file_upload(target, folder_id, written, sha256=digest)
+    queue_key = await enqueue_file_upload(target, folder_id, written, sha256=digest,
+                                         display_name=display_name)
     return {
-        "ok": True, "queued": True, "bytes": written, "name": target.name,
+        "ok": True, "queued": True, "bytes": written, "name": display_name or target.name,
         "folder_id": folder_id, "queue_key": queue_key,
     }
 
@@ -2005,7 +2115,8 @@ async def _handle_resume_locked(raw_request, key, part, offset, size, name, fold
         return {"ok": True, "partial": True, "received": written, "size": size}
 
     # assembled: move into the normal temp dir and hand it to the queue
-    safe_name = Path(name).name or "upload.bin"
+    display_name = Path(name).name or "upload.bin"
+    safe_name = _fit_filename(display_name)
     target = UPLOAD_TMP_DIR / safe_name
     try:
         part.replace(target)
@@ -2018,8 +2129,9 @@ async def _handle_resume_locked(raw_request, key, part, offset, size, name, fold
             digest = sha256_of_file(target)
         except OSError:
             digest = None
-    logger.info("resumed upload finished: %s (%d bytes)", safe_name, written)
-    return await _finish_resumed_upload(target, folder_id, written, digest, claimed, wait)
+    logger.info("resumed upload finished: %s (%d bytes)", display_name, written)
+    return await _finish_resumed_upload(target, folder_id, written, digest, claimed, wait,
+                                        display_name=display_name)
 
 
 @router.put("/api/upload/raw")
@@ -2058,8 +2170,8 @@ async def up_upload_raw(
     if key:
         return await _handle_resume(request, key, offset, size, name, folder_id, claimed, bool(wait))
     UPLOAD_TMP_DIR.mkdir(parents=True, exist_ok=True)
-    safe_name = Path(name).name or "upload.bin"
-    target = UPLOAD_TMP_DIR / safe_name
+    display_name = Path(name).name or "upload.bin"
+    target = UPLOAD_TMP_DIR / _fit_filename(display_name)
     written = 0
     _active_uploads.add(str(target))
     finished = False
@@ -2102,11 +2214,12 @@ async def up_upload_raw(
                 }
         if wait:
             _wait_lane = _lane_for_size(written)
-            _start_active(_wait_lane, target.name, written, await _folder_name_by_id(folder_id))
+            _start_active(_wait_lane, display_name, written, await _folder_name_by_id(folder_id))
             try:
                 res = await upload_file_auto(
                     str(target), folder_id=folder_id, delete_after=True,
                     progress_cb=lambda cur, tot, _l=_wait_lane: _track_progress(_l, cur, tot),
+                    display_name=display_name,
                 )
             finally:
                 _stop_active(_wait_lane)
@@ -2118,13 +2231,14 @@ async def up_upload_raw(
                 "file": (res["files"][0] if res["files"] else None),
                 "files": res["files"],
             }
-        queue_key = await enqueue_file_upload(target, folder_id, written, sha256=digest)
+        queue_key = await enqueue_file_upload(target, folder_id, written, sha256=digest,
+                                             display_name=display_name)
         finished = True
         return {
             "ok": True,
             "queued": True,
             "bytes": written,
-            "name": target.name,
+            "name": display_name,
             "folder_id": folder_id,
             "queue_key": queue_key,
         }

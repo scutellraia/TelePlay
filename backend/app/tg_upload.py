@@ -357,7 +357,7 @@ async def split_video(path, limit_bytes=None):
     raise last_exc if last_exc else RuntimeError("splitting failed")
 
 
-async def upload_file_auto(path, telegram_id=None, folder_id=None, delete_after=True, progress_cb=None, sha256=None):
+async def upload_file_auto(path, telegram_id=None, folder_id=None, delete_after=True, progress_cb=None, sha256=None, display_name=None):
     """Upload a file, splitting it first when it is a video above the bot limit.
 
     Returns {"parts": n, "files": [ ...file dicts... ]}.
@@ -424,6 +424,6 @@ async def upload_file_auto(path, telegram_id=None, folder_id=None, delete_after=
 
     result = await upload_path_to_telegram(
         str(path), telegram_id=telegram_id, folder_id=folder_id, delete_after=delete_after,
-        progress_cb=progress_cb, sha256=sha256,
+        progress_cb=progress_cb, sha256=sha256, caption=display_name,
     )
     return {"parts": 1, "files": [result]}
