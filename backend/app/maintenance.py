@@ -4,8 +4,7 @@
 1. 清理 `.resume/` 下超过 24 小时没有进展的续传碎片（中断上传留下的 .part）。
    24 小时内的碎片保留，方便浏览器续传。
 2. 清理 /downloads 下超过 24 小时的空目录（aria2 为每个任务建目录，但从不删除）。
-   如果 aria2 里仍有任务指向这个目录，就跳过——等任务被手动停掉后再过 24 小时才删。
-   ed2k(mldonkey) 的目录树（默认 /downloads/ed2k/**）属于受保护路径，永不清理。
+   判定统一为「是否仍被任何下载器（aria2 / mldonkey）引用」：被引用就跳过，等任务停掉再过 24 小时才删。
 
 另外提供 prune_empty_parent()：上传成功并删除源文件后，顺手把因此变空的父目录删掉。
 """
@@ -24,17 +23,6 @@ DOWNLOAD_DIR = Path(os.environ.get("DOWNLOADS_DIR", "/downloads"))
 
 STALE_SECONDS = 24 * 3600
 
-# ed2k(mldonkey) 的目录树必须存在，不能被「空目录清理」删掉
-_ED2K_ROOT = os.environ.get("ED2K_DIR", str(DOWNLOAD_DIR / "ed2k"))
-PROTECTED_DIRS = {os.path.realpath(_ED2K_ROOT)}
-
-
-def _is_protected(path):
-    real = os.path.realpath(str(path))
-    for root in PROTECTED_DIRS:
-        if real == root or real.startswith(root + os.sep):
-            return True
-    return False
 INTERVAL_SECONDS = 24 * 3600
 
 _task = None
@@ -88,6 +76,34 @@ async def _aria2_referenced_dirs():
     return dirs
 
 
+async def _mldonkey_referenced_dirs():
+    """mldonkey(ed2k) 仍有任务时，它正在使用的目录集合（与 aria2 同一套判定）。"""
+    from .routers.up import _mld_vd_rows, ED2K_DONE_DIR, ED2K_TEMP_DIR, ED2K_INCOMING_DIR
+
+    dirs = set()
+    try:
+        rows = await asyncio.to_thread(_mld_vd_rows)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("maintenance: mldonkey vd failed: %s", exc)
+        return dirs
+    if not rows:
+        return dirs
+    for d in (ED2K_TEMP_DIR, ED2K_INCOMING_DIR, ED2K_DONE_DIR):
+        dirs.add(os.path.realpath(str(d)))
+    return dirs
+
+
+async def _referenced_dirs():
+    """所有下载器仍引用的目录并集（aria2 + mldonkey）。"""
+    dirs = set()
+    for probe in (_aria2_referenced_dirs, _mldonkey_referenced_dirs):
+        try:
+            dirs |= await probe()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("maintenance: %s failed: %s", probe.__name__, exc)
+    return dirs
+
+
 def _purge_empty_dirs(referenced):
     """删除超过 24 小时、且没有被 aria2 任务引用的空目录。"""
     if not DOWNLOAD_DIR.is_dir():
@@ -99,8 +115,6 @@ def _purge_empty_dirs(referenced):
         for name in dirnames:
             path = os.path.join(dirpath, name)
             try:
-                if _is_protected(path):
-                    continue
                 if os.listdir(path):
                     continue
                 if now - os.path.getmtime(path) < STALE_SECONDS:
@@ -120,7 +134,7 @@ async def daily_maintenance():
     while True:
         try:
             parts = _purge_resume_parts()
-            referenced = await _aria2_referenced_dirs()
+            referenced = await _referenced_dirs()
             dirs = _purge_empty_dirs(referenced)
             if parts or dirs:
                 logger.info(
@@ -150,8 +164,6 @@ def stop_maintenance():
 def prune_empty_parent(path, stop_at=None):
     """删除 path 的父目录，直至 stop_at（根目录本身不删）。空目录以外的会直接失败。"""
     root = os.path.realpath(str(stop_at or DOWNLOAD_DIR))
-    if _is_protected(path):
-        return False
     try:
         candidate = os.path.dirname(os.path.realpath(str(path)))
     except OSError:

@@ -60,6 +60,8 @@ ARIA2_RPC_URL = os.environ.get("ARIA2_RPC_URL", "http://aria2:6800/jsonrpc")
 # ---- ed2k / mldonkey ----
 MLDONKEY_URL = os.environ.get("MLDONKEY_URL", "http://mldonkey:4080/mldonkey")
 ED2K_DONE_DIR = Path(os.environ.get("ED2K_DONE_DIR", "/downloads/ed2k/done"))
+ED2K_TEMP_DIR = Path(os.environ.get("ED2K_TEMP_DIR", "/downloads/ed2k/incoming/temp"))
+ED2K_INCOMING_DIR = Path(os.environ.get("ED2K_INCOMING_DIR", "/downloads/ed2k/incoming/files"))
 ED2K_POLL_SECONDS = int(os.environ.get("ED2K_POLL_SECONDS", "20"))
 ED2K_FOLDERS_FILE = Path(os.environ.get("ED2K_FOLDERS_FILE", "/app/session/ed2k-folders.json"))
 ED2K_RE = re.compile(r"ed2k://\|file\|[^|]+\|\d+\|[0-9A-Fa-f]{32}\|/?", re.IGNORECASE)
@@ -748,7 +750,12 @@ async def mldonkey_call(command):
 
 async def _ed2k_upload_loop():
     """监听 mldonkey 的完成目录：稳定后移入下载目录并排入上传队列。"""
-    ED2K_DONE_DIR.mkdir(parents=True, exist_ok=True)
+    # 和 aria2 一样「按需自愈」：清理任务可能删掉空目录，这里每轮补齐
+    for _d in (ED2K_TEMP_DIR, ED2K_INCOMING_DIR, ED2K_DONE_DIR):
+        try:
+            _d.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:  # noqa: BLE001
+            logger.debug("cannot ensure %s: %s", _d, exc)
     seen = {}
     logger.info("ed2k watcher started (dir=%s, every %ss)", ED2K_DONE_DIR, ED2K_POLL_SECONDS)
     while True:
