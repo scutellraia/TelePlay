@@ -132,6 +132,8 @@ services:
       - backend
     ports:
       - "${WEB_PORT:-80}:80"
+    volumes:
+      - ./web/mldonkey.htpasswd:/etc/nginx/.mldonkey.htpasswd:ro
     networks:
       - telegram-tv-network
 
