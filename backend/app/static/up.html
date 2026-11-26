@@ -912,16 +912,23 @@ async function refreshTasks(){
     if (!tasks.length) { box.innerHTML = '<div class="empty">没有进行中的任务</div>'; return; }
     box.innerHTML = tasks.map(t => {
       const pct = t.percent || 0;
+      const src = (t.kind === 'ed2k' && t.connections) ? (' · 源 ' + t.connections) : '';
       const cls = t.bucket === 'active' ? 'active' : (t.bucket === 'waiting' ? 'waiting' : 'stopped');
-      const actions = t.bucket === 'active'
-        ? '<button class="ghost" data-gid="' + t.gid + '" data-act="pause">暂停</button><button class="ghost" data-gid="' + t.gid + '" data-act="remove">移除</button>'
-        : '<button class="ghost" data-gid="' + t.gid + '" data-act="forget">清理</button>';
+      const isEd2k = t.kind === 'ed2k';
+      const actions = isEd2k
+        ? (t.paused
+            ? '<button class="ghost" data-gid="' + t.gid + '" data-act="unpause">继续</button><button class="ghost" data-gid="' + t.gid + '" data-act="remove">移除</button>'
+            : '<button class="ghost" data-gid="' + t.gid + '" data-act="pause">暂停</button><button class="ghost" data-gid="' + t.gid + '" data-act="remove">移除</button>')
+        : (t.bucket === 'active'
+            ? '<button class="ghost" data-gid="' + t.gid + '" data-act="pause">暂停</button><button class="ghost" data-gid="' + t.gid + '" data-act="remove">移除</button>'
+            : '<button class="ghost" data-gid="' + t.gid + '" data-act="forget">清理</button>');
       const filesBtn = '<button class="ghost" data-files="' + t.gid + '">文件</button>';
       return '<div class="taskwrap"><div class="task"><div class="name" title="' + (t.name || '') + '">' + (t.name || t.gid) +
              '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
-             '<div class="muted">' + pct + '% · ' + fmtSize(t.done) + ' / ' + fmtSize(t.total) + ' · ' + fmtSpeed(t.speed) + '</div></div>' +
+             '<div class="muted">' + pct + '% · ' + fmtSize(t.done) + ' / ' + fmtSize(t.total) + ' · ' + fmtSpeed(t.speed) + src + '</div></div>' +
              '<span class="tag folder" title="下载完成后上传到">' + (t.folder || '根目录') + '</span>' +
-             '<span class="tag ' + cls + '">' + (t.bucket === 'active' ? '下载中' : (t.bucket === 'waiting' ? '等待' : '停止')) + '</span>' +
+             (isEd2k ? '<span class="tag">ed2k</span>' : '') +
+             '<span class="tag ' + cls + '">' + (t.paused ? '已暂停' : (t.bucket === 'active' ? '下载中' : (t.bucket === 'waiting' ? '等待' : '停止'))) + '</span>' +
              filesBtn + actions + '</div>' + renderTaskFiles(t.gid) + '</div>';
     }).join('');
   } catch (e) {

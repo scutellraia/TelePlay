@@ -25,6 +25,7 @@ Routes:
   POST /up/api/hooks/complete
 """
 
+import socket
 import asyncio
 import hashlib
 import json
@@ -1795,6 +1796,153 @@ async def up_add_torrent(
     }
 
 
+# ---------------- mldonkey(ed2k) 任务适配层 ----------------
+MLDONKEY_TELNET = os.environ.get("MLDONKEY_TELNET", "mldonkey:4000")
+_SIZE_UNITS = {"b": 1, "k": 1024, "m": 1024 ** 2, "g": 1024 ** 3, "t": 1024 ** 4}
+
+
+def _mld_size(text):
+    """把 mldonkey 的体积写法（3.9gb / 1.0mb / 512k）换成字节。"""
+    t = (text or "").strip().lower().replace(" ", "")
+    if not t or t in ("-", "n/a"):
+        return 0
+    for suffix in ("tb", "gb", "mb", "kb", "b"):
+        if t.endswith(suffix):
+            num = t[: -len(suffix)]
+            try:
+                return int(float(num) * _SIZE_UNITS[suffix[0]])
+            except ValueError:
+                return 0
+    try:
+        return int(float(t))
+    except ValueError:
+        return 0
+
+
+def _mld_cmd(command, timeout=20.0):
+    """通过 mldonkey 的 telnet 接口执行一条命令（返回原始文本）。"""
+    host, _, port = MLDONKEY_TELNET.partition(":")
+    port = int(port or 4000)
+    with socket.create_connection((host, port), timeout=timeout) as sock:
+        sock.settimeout(3.0)
+        time.sleep(0.4)
+        try:
+            sock.recv(65536)
+        except OSError:
+            pass
+        sock.sendall((command + "\n").encode())
+        chunks = []
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                chunk = sock.recv(65536)
+            except socket.timeout:
+                break
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if b"command-line:" in b"".join(chunks[-1:]) and len(chunks) > 1:
+                break
+        return b"".join(chunks).decode("utf-8", "ignore")
+
+
+def _mld_strip_ansi(text):
+    return re.sub(r"\x1b\[[0-9;()]*[A-Za-z]", "", text or "")
+
+
+def _mld_vd_rows():
+    """读取 mldonkey 的下载列表，返回 [{num,name,percent,done,total,sources,rate_kb,state}]。"""
+    try:
+        raw = _mld_strip_ansi(_mld_cmd("vd"))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("mldonkey vd failed: %s", exc)
+        return []
+
+    rows = []
+    for line in raw.splitlines():
+        m = re.match(r"\s*\[([A-Za-z])\s*(\d+)\]\s*(.*)$", line)
+        if not m:
+            continue
+        state, num, rest = m.group(1).upper(), int(m.group(2)), m.group(3).strip()
+        if state in ("C", "c"):     # 已取消/已移除的任务不展示
+            continue
+        tokens = [t for t in re.split(r"\s+", rest) if t]
+        # 列顺序（从右数）：prio, rate, active(源 a/b), old, lSeen, size, done, percent
+        if len(tokens) < 13:
+            continue
+        name = " ".join(tokens[4:-8]).strip()
+        try:
+            percent = float(tokens[-8])
+        except ValueError:
+            percent = 0.0
+        done = _mld_size(tokens[-7])
+        total = _mld_size(tokens[-6])
+        active = tokens[-3]
+        try:
+            rate_kb = float(tokens[-2])
+        except ValueError:
+            rate_kb = 0.0
+        rows.append({
+            "num": num,
+            "name": name.strip(),
+            "percent": percent,
+            "done": done,
+            "total": total,
+            "sources": active,
+            "rate_kb": rate_kb,
+            "state": state,
+        })
+    return rows
+
+
+def _mld_task_shape(row):
+    paused = row["state"] == "P"
+    total = row["total"] or 0
+    done = row["done"] or 0
+    pct = round(done * 100.0 / total, 1) if total else row["percent"]
+    if paused:
+        bucket = "stopped"
+    elif row["rate_kb"] > 0 or (pct < 100 and row["state"] == "D"):
+        bucket = "active"
+    else:
+        bucket = "waiting"
+    name = row["name"]
+    folder_id = _ed2k_folder_for(name)
+    folder = "#%d" % folder_id if folder_id else "根目录"
+    return {
+        "gid": "ed2k:%d" % row["num"],
+        "kind": "ed2k",
+        "bucket": bucket,
+        "status": "paused" if paused else ("active" if bucket == "active" else "waiting"),
+        "paused": paused,
+        "name": name,
+        "total": total,
+        "done": done,
+        "percent": pct,
+        "speed": int(row["rate_kb"] * 1024),
+        "connections": row["sources"],
+        "error": "",
+        "files": 1,
+        "folder": folder,
+    }
+
+
+async def _mld_tasks():
+    rows = await asyncio.to_thread(_mld_vd_rows)
+    return [_mld_task_shape(r) for r in rows]
+
+
+async def _mld_action(num, action):
+    mapping = {"pause": "pause %d", "unpause": "resume %d", "remove": "cancel %d", "forget": "cancel %d"}
+    tmpl = mapping.get(action)
+    if not tmpl:
+        raise RuntimeError("unsupported action")
+    out = await asyncio.to_thread(_mld_cmd, tmpl % num)
+    # cancel 会要求二次确认（Type 'confirm yes/no'），必须回一句才真正删除
+    if "confirm" in (out or "").lower():
+        await asyncio.to_thread(_mld_cmd, "confirm yes")
+
+
 @router.get("/api/tasks")
 async def up_tasks(token: str = Depends(require_session), db: AsyncSession = Depends(get_db)):
     try:
@@ -1880,14 +2028,50 @@ async def up_tasks(token: str = Depends(require_session), db: AsyncSession = Dep
             "folder": folder_label(task.get("gid")),
         }
 
-    items = [shape(t, "active") for t in active]
-    items += [shape(t, "waiting") for t in waiting]
-    items += [shape(t, "stopped") for t in stopped]
+    items = []
+    for bucket, group in (("active", active), ("waiting", waiting), ("stopped", stopped)):
+        for t in group:
+            shaped = shape(t, bucket)
+            shaped["kind"] = "aria2"
+            shaped["paused"] = False
+            items.append(shaped)
+
+    # ed2k（mldonkey）任务一起列出，前端按 kind 区分渲染与按钮
+    try:
+        ed2k_items = await _mld_tasks()
+        for it in ed2k_items:
+            label = it.get("folder") or ""
+            if label.startswith("#") and label[1:].isdigit():
+                it["folder"] = folder_names.get(int(label[1:]), label)
+            elif not label:
+                it["folder"] = "根目录"
+        items += ed2k_items
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("cannot list mldonkey tasks: %s", exc)
+
     return {"tasks": items}
 
 
 @router.get("/api/task/{gid}/files")
 async def up_task_files(gid: str, token: str = Depends(require_session)):
+    if gid.startswith("ed2k:"):
+        try:
+            num = int(gid.split(":", 1)[1])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="bad ed2k task id")
+        rows = await asyncio.to_thread(_mld_vd_rows)
+        for r in rows:
+            if r["num"] == num:
+                return {"files": [{
+                    "index": 0,
+                    "name": r["name"],
+                    "path": r["name"],
+                    "length": r["total"],
+                    "done": r["done"],
+                    "complete": r["percent"] >= 100,
+                }]}
+        return {"files": []}
+
     """Per-file list of an aria2 task (to pick finished files manually)."""
     try:
         task = await aria2_call("aria2.tellStatus", [gid, ["gid", "status", "dir", "files"]])
@@ -1961,6 +2145,17 @@ async def up_task_upload_file(gid: str, payload: dict,
 
 @router.post("/api/task/{gid}/{action}")
 async def up_task_action(gid: str, action: str, token: str = Depends(require_session)):
+    if gid.startswith("ed2k:"):
+        try:
+            num = int(gid.split(":", 1)[1])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="bad ed2k task id")
+        try:
+            await _mld_action(num, action)
+            return {"ok": True, "kind": "ed2k"}
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail="mldonkey error: " + str(exc)[:200])
+
     mapping = {
         "pause": "aria2.pause",
         "unpause": "aria2.unpause",
