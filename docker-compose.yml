@@ -114,6 +114,8 @@ services:
       - "4662:4662/tcp"
       - "4665:4665/udp"
       - "4672:4672/udp"
+      # Web 管理界面：只绑本机，通过 SSH 隧道访问（避免无鉴权界面暴露公网）
+      - "127.0.0.1:4080:4080"
     volumes:
       - mldonkey_data:/var/lib/mldonkey
       - downloads:/downloads

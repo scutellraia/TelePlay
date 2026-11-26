@@ -27,6 +27,18 @@ if [ ! -f "$HOME_DIR/downloads.ini" ]; then
     sleep 1
 fi
 
+set_array_opt() {
+    # 数组型选项（如 allowed_ips = [ "a"; "b";]）可能跨多行，必须整块替换
+    key="$1"; value="$2"
+    awk -v key="$key" -v val="$3" '
+      index($0, key " =") == 1 { print val; skip=1; next }
+      skip && /\]/ { skip=0; next }
+      skip { next }
+      { print }
+    ' "$HOME_DIR/downloads.ini" > "$HOME_DIR/downloads.ini.new" \
+      && mv "$HOME_DIR/downloads.ini.new" "$HOME_DIR/downloads.ini"
+}
+
 set_opt() {
     key="$1"; value="$2"
     if grep -qE "^[[:space:]]*${key}[[:space:]]*=" "$HOME_DIR/downloads.ini"; then
@@ -43,7 +55,7 @@ set_opt incoming_directory "\"$INCOMING\""
 set_opt temp_directory "\"$TEMP_DIR\""
 set_opt enable_kademlia true
 set_opt enable_servers true
-set_opt allowed_ips '[ "0.0.0.0/0" ]'
+set_array_opt allowed_ips '[ "0.0.0.0/0" ]'
 set_opt max_hard_download_rate 0
 set_opt max_hard_upload_rate 0
 set_opt auto_commit false
