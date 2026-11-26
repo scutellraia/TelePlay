@@ -915,10 +915,11 @@ async function refreshTasks(){
       const src = (t.kind === 'ed2k' && t.connections) ? (' · 源 ' + t.connections) : '';
       const cls = t.bucket === 'active' ? 'active' : (t.bucket === 'waiting' ? 'waiting' : 'stopped');
       const isEd2k = t.kind === 'ed2k';
+      // mldonkey 的暂停靠「断源」实现，vd 里状态字母不变，所以固定给暂停+继续两个按钮
       const actions = isEd2k
-        ? (t.paused
-            ? '<button class="ghost" data-gid="' + t.gid + '" data-act="unpause">继续</button><button class="ghost" data-gid="' + t.gid + '" data-act="remove">移除</button>'
-            : '<button class="ghost" data-gid="' + t.gid + '" data-act="pause">暂停</button><button class="ghost" data-gid="' + t.gid + '" data-act="remove">移除</button>')
+        ? ('<button class="ghost" data-gid="' + t.gid + '" data-act="pause">暂停</button>' +
+           '<button class="ghost" data-gid="' + t.gid + '" data-act="unpause">继续</button>' +
+           '<button class="ghost" data-gid="' + t.gid + '" data-act="remove">移除</button>')
         : (t.bucket === 'active'
             ? '<button class="ghost" data-gid="' + t.gid + '" data-act="pause">暂停</button><button class="ghost" data-gid="' + t.gid + '" data-act="remove">移除</button>'
             : '<button class="ghost" data-gid="' + t.gid + '" data-act="forget">清理</button>');
