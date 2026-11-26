@@ -57,7 +57,7 @@ settings = get_settings()
 ARIA2_RPC_URL = os.environ.get("ARIA2_RPC_URL", "http://aria2:6800/jsonrpc")
 
 # ---- ed2k / mldonkey ----
-MLDONKEY_URL = os.environ.get("MLDONKEY_URL", "http://mldonkey:4080")
+MLDONKEY_URL = os.environ.get("MLDONKEY_URL", "http://mldonkey:4080/mldonkey")
 ED2K_DONE_DIR = Path(os.environ.get("ED2K_DONE_DIR", "/downloads/ed2k/done"))
 ED2K_POLL_SECONDS = int(os.environ.get("ED2K_POLL_SECONDS", "20"))
 ED2K_FOLDERS_FILE = Path(os.environ.get("ED2K_FOLDERS_FILE", "/app/session/ed2k-folders.json"))
@@ -739,9 +739,10 @@ def _ed2k_folder_for(name):
 
 async def mldonkey_call(command):
     """向 mldonkey 的 Web 接口发一条控制台命令。"""
-    async with httpx.AsyncClient(timeout=25.0) as client:
+    async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
         resp = await client.get(MLDONKEY_URL + "/submit", params={"q": command})
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise RuntimeError("mldonkey HTTP %d" % resp.status_code)
         return resp.text
 
 
@@ -1752,7 +1753,8 @@ async def up_add_torrent(
                 detail="only magnet, a 40-char info hash, an http(s) link or an ed2k link is supported",
             )
     for target in ed2k_targets:
-        if not ED2K_RE.fullmatch(target.strip()):
+        # 只做协议头粗校验；文件名/哈希等细节交给 mldonkey 判断
+        if not target.strip().lower().startswith("ed2k://|file|"):
             raise HTTPException(status_code=400, detail="invalid ed2k link")
     folder_id = await _resolve_folder_id(
         db, (payload or {}).get("folder"), bool((payload or {}).get("create_folder"))
