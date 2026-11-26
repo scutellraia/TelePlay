@@ -473,11 +473,11 @@
   <div class="card">
     <h2>添加下载任务</h2>
     <div class="row" style="flex-wrap:nowrap">
-      <div style="flex:1 1 auto;min-width:180px"><input type="text" id="torrentUrl" placeholder="magnet、40 位哈希或 http(s) 直链" /></div>
+      <div style="flex:1 1 auto;min-width:180px"><input type="text" id="torrentUrl" placeholder="magnet、40 位哈希、http(s) 直链或 ed2k 链接" /></div>
       <select id="torrentFolder" title="下载后存入哪个文件夹" style="flex:0 0 128px;width:128px"></select>
       <button id="btnAdd">开始下载</button>
     </div>
-    <div class="muted" style="margin-top:8px">支持 magnet、40 位 info hash、.torrent 与直链；可一次粘贴多个链接或带中文的整段文本，会自动识别。下载完成后会自动上传到 Telegram 并从服务器删除。</div>
+    <div class="muted" style="margin-top:8px">支持 magnet、40 位 info hash、.torrent、直链与 ed2k 链接（ed2k 交给 mldonkey 下载）；可一次粘贴多个链接或带中文的整段文本，会自动识别。下载完成后会自动上传到 Telegram 并从服务器删除。</div>
   </div>
 
   <!-- 任务列表 -->
