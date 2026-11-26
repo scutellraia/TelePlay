@@ -420,61 +420,57 @@ def _magnet_from_hash(info_hash):
     return base
 
 MAGNET_RE = re.compile(r"magnet:\?[A-Za-z0-9:/?&=#._~%+\-]+", re.IGNORECASE)
+HASH40_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+HASH32_RE = re.compile(r"^[A-Za-z2-7]{32}$")
 
 
 def _extract_targets(raw):
-    """Pull every magnet link out of pasted text and fall back to hash / url.
+    """从整段文本里挖出所有链接：ed2k、magnet、http(s) 与裸 info hash。
 
-    Handles text with Chinese characters or other noise around the links, and
-    returns all of them so one paste can create several tasks.
+    允许一条消息里混着中文、标点、换行，也允许同时出现多种类型；
+    返回值按「ed2k 在前、其它在后」排列，调用方按前缀分流。
     """
     text = (raw or "").strip()
     if not text:
         return []
 
-    if text.lower().startswith("ed2k://"):
-        return [text]
+    out = []
+    seen = set()
 
-    ed2k_hits = [m.rstrip(")。，,;；、]）") for m in ED2K_RE.findall(text)]
-    if ed2k_hits:
-        out = []
-        for m in ed2k_hits:
-            if m and m not in out:
-                out.append(m)
-        return out
+    def add(value):
+        value = (value or "").strip()
+        if value and value not in seen:
+            seen.add(value)
+            out.append(value)
 
-    found = [m.rstrip(")。，,;；、]）") for m in MAGNET_RE.findall(text)]
-    unique = []
-    for m in found:
-        if m and m not in unique:
-            unique.append(m)
-    if unique:
-        return unique
+    # 1) ed2k：先按标准格式找；找不到再按空格/换行切块兜底（兼容全角或异常字符）
+    for m in ED2K_RE.findall(text):
+        add(m.rstrip(")。，,;；、]）"))
+    if "ed2k://" in text.lower():
+        for chunk in re.split(r"[\s\u3000]+", text):
+            if chunk.lower().startswith("ed2k://"):
+                add(chunk)
 
-    hash_hits = re.findall(r"[0-9a-fA-F]{40}", text)
-    if hash_hits:
-        magnets = []
-        for item in hash_hits:
-            magnet = _magnet_from_hash(item.lower())
-            if magnet not in magnets:
-                magnets.append(magnet)
-        return magnets
+    # 2) magnet
+    for m in MAGNET_RE.findall(text):
+        add(m.rstrip(")。，,;；、]）"))
 
-    url_hits = re.findall(r"https?://[A-Za-z0-9:/?&=#._~%+\-]+", text)
-    if url_hits:
-        urls = []
-        for item in url_hits:
-            cleaned = item.rstrip(")。，,;；、]）")
-            if cleaned and cleaned not in urls:
-                urls.append(cleaned)
-        return urls
+    # 3) http(s)
+    for m in re.findall(r"https?://[A-Za-z0-9:/?&=#._~%+\-]+", text):
+        add(m.rstrip(")。，,;；、]）"))
 
-    single = _normalize_magnet(text)
-    return [single] if single else []
+    # 4) 裸 40 位 info hash（转成带 tracker 的 magnet）
+    if not out:
+        for h in re.findall(r"\b[0-9a-fA-F]{40}\b", text):
+            add(_magnet_from_hash(h.lower()))
 
+    # 5) 都没有时按单条链接处理
+    if not out:
+        single = _normalize_magnet(text)
+        if single:
+            add(single)
 
-HASH40_RE = re.compile(r"^[0-9a-fA-F]{40}$")
-HASH32_RE = re.compile(r"^[A-Za-z2-7]{32}$")
+    return out
 
 
 def _normalize_magnet(raw):
