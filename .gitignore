@@ -127,3 +127,6 @@ Desktop.ini
 *.bak
 *.backup
 .cache/
+
+# mldonkey Web UI 的 Basic 认证文件（只放服务器本地，不进仓库）
+web/mldonkey.htpasswd
