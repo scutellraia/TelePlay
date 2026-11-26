@@ -49,6 +49,7 @@ set_opt() {
 }
 
 set_opt http_port 4080
+set_opt http_root_url '"/mldonkey/"'
 set_opt telnet_port 4000
 set_opt port 4662
 set_opt incoming_directory "\"$INCOMING\""
