@@ -168,8 +168,11 @@ def _uploading_files():
 def _purge_orphan_files(referenced_files, uploading_files):
     """删除 /downloads 下「不再被任何下载器引用、也不在上传中」且超过 24h 的文件。
 
-    判定是文件级的：暂停/进行中的任务（aria2 的 files、mldonkey 的 files.ini）都不会被误删；
-    只有被从下载列表移除后遗留的文件才会命中。
+    判定是文件级的：
+    - aria2 任务 files[].path、mldonkey files.ini 的 file_name → 仍被引用，绝不动；
+    - 上传队列里的文件 → 不动；
+    - /downloads/ed2k/done（等待上传）整棵跳过；
+    - 其余「无主 + 超 24h」的即历史残留（例如已从下载列表移除的旧任务），删除并顺带清空父目录。
     """
     if not DOWNLOAD_DIR.is_dir():
         return 0
@@ -179,7 +182,6 @@ def _purge_orphan_files(referenced_files, uploading_files):
     removed = 0
     for dirpath, dirnames, filenames in os.walk(root, topdown=True):
         real_dir = os.path.realpath(dirpath)
-        # 等待上传的完成目录整体跳过
         if real_dir == done_root or real_dir.startswith(done_root + os.sep):
             dirnames[:] = []
             continue
