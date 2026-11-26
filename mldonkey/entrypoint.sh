@@ -64,6 +64,7 @@ set_opt enable_servers true
 set_array_opt allowed_ips '[ "0.0.0.0/0" ]'
 set_opt max_hard_download_rate 0
 set_opt max_hard_upload_rate 0
+set_opt max_concurrent_downloads 5
 set_opt auto_commit false
 set_opt file_completed_cmd '"/usr/local/bin/on_complete.sh"'
 
