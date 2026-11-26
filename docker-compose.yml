@@ -73,7 +73,7 @@ services:
       UP_STATE_FILE: /app/session/up-state.json
       UP_STATUS_FILE: /app/status/status.json
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     volumes:
       # Persist Telegram session files only (do not mount over /app — that hides rebuilt code)
       - telegram_session:/app/session
