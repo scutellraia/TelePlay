@@ -9,6 +9,11 @@ DONE_DIR=/downloads/ed2k/done
 
 mkdir -p "$HOME_DIR" "$INCOMING" "$TEMP_DIR" "$DONE_DIR"
 chmod 777 "$DONE_DIR" 2>/dev/null || true
+# ed2k 客户端端口固定 4662（mldonkey 默认 7633，会和端口映射/防火墙对不上）
+if [ -f "$HOME_DIR/donkey.ini" ]; then
+    sed -i -E 's|^[[:space:]]*port[[:space:]]*=.*|port = 4662|' "$HOME_DIR/donkey.ini"
+fi
+
 chown -R mldonkey:mldonkey "$HOME_DIR" /downloads/ed2k 2>/dev/null || true
 
 start_core() {
