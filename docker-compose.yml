@@ -79,6 +79,8 @@ services:
       - telegram_session:/app/session
       - downloads:/downloads
       - /home/ubuntu/tp-status:/app/status:ro
+      # mldonkey 的任务清单（files.ini），供每日维护做文件级残留判定
+      - mldonkey_data:/mldonkey-state:ro
       - upload_tmp:/tmp/tp-uploads
     networks:
       - telegram-tv-network
