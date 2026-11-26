@@ -1761,11 +1761,17 @@ async def up_add_torrent(
     )
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
     ed2k_ok = 0
+    ed2k_dup = 0
     for target in ed2k_targets:
         parts = target.split("|")
         ed2k_name = parts[2].strip() if len(parts) > 3 else ""
         try:
-            await mldonkey_call("dllink " + target.strip())
+            reply = await mldonkey_call("dllink " + target.strip())
+            if "already in download queue" in (reply or "").lower():
+                ed2k_dup += 1
+                logger.info("ed2k link already queued, skipped: %s", ed2k_name or target[:60])
+                _remember_ed2k_folder(ed2k_name, folder_id)
+                continue
             ed2k_ok += 1
             _remember_ed2k_folder(ed2k_name, folder_id)
             logger.info("ed2k link queued in mldonkey: %s", ed2k_name or target[:60])
@@ -1784,14 +1790,19 @@ async def up_add_torrent(
             continue
         _remember_torrent_folder(gid, folder_id)
         gids.append(gid)
-    if not gids and not ed2k_ok:
+    if not gids and not ed2k_ok and not ed2k_dup:
         raise HTTPException(status_code=502, detail="no task was accepted (aria2/mldonkey)")
+    message = ""
+    if ed2k_dup and not ed2k_ok and not gids:
+        message = "这些 ed2k 链接已在下载队列中，无需重复添加"
     return {
         "ok": True,
         "gid": gids[0] if gids else None,
         "gids": gids,
-        "count": len(gids),
+        "count": len(gids) + ed2k_ok,
         "ed2k": ed2k_ok,
+        "ed2k_duplicate": ed2k_dup,
+        "message": message,
         "folder_id": folder_id,
     }
 

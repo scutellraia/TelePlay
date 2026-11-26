@@ -1298,7 +1298,13 @@ $('btnAdd').onclick = async () => {
     var tf = (document.getElementById('torrentFolder').value || '').trim();
     var res = await api('/up/api/torrent', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ url: url, folder: tf }) });
     input.value = '';
-    toast('已加入 ' + ((res && res.count) || 1) + ' 个下载任务');
+    var added = (res && res.count) || 0;
+    var dup = (res && res.ed2k_duplicate) || 0;
+    if ((res && res.message) || (!added && dup)) {
+      toast((res && res.message) || ('已在下载队列中：' + dup + ' 个，未重复添加'));
+    } else {
+      toast('已加入 ' + added + ' 个下载任务' + (dup ? ('（' + dup + ' 个已存在，跳过）') : ''));
+    }
     refreshStatus(); refreshTasks();
   } catch (e) { toast('添加失败：' + e.message); }
   finally { btn.disabled = false; }
