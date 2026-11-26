@@ -55,6 +55,13 @@ router = APIRouter()
 settings = get_settings()
 
 ARIA2_RPC_URL = os.environ.get("ARIA2_RPC_URL", "http://aria2:6800/jsonrpc")
+
+# ---- ed2k / mldonkey ----
+MLDONKEY_URL = os.environ.get("MLDONKEY_URL", "http://mldonkey:4080")
+ED2K_DONE_DIR = Path(os.environ.get("ED2K_DONE_DIR", "/downloads/ed2k/done"))
+ED2K_POLL_SECONDS = int(os.environ.get("ED2K_POLL_SECONDS", "20"))
+ED2K_FOLDERS_FILE = Path(os.environ.get("ED2K_FOLDERS_FILE", "/app/session/ed2k-folders.json"))
+ED2K_RE = re.compile(r"ed2k://\|file\|[^|]+\|\d+\|[0-9A-Fa-f]{32}\|/?", re.IGNORECASE)
 ARIA2_RPC_SECRET = os.environ.get("ARIA2_RPC_SECRET", "")
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
 UPLOAD_TMP_DIR = Path(os.environ.get("UPLOAD_TMP_DIR", "/tmp/tp-uploads"))
@@ -425,6 +432,14 @@ def _extract_targets(raw):
     if not text:
         return []
 
+    ed2k_hits = [m.rstrip(")。，,;；、]）") for m in ED2K_RE.findall(text)]
+    if ed2k_hits:
+        out = []
+        for m in ed2k_hits:
+            if m and m not in out:
+                out.append(m)
+        return out
+
     found = [m.rstrip(")。，,;；、]）") for m in MAGNET_RE.findall(text)]
     unique = []
     for m in found:
@@ -686,6 +701,88 @@ async def _folder_for_gid(gid):
 
 
 # ------------------------------------------------------------- aria2 client
+def _load_ed2k_folders():
+    try:
+        if ED2K_FOLDERS_FILE.is_file():
+            return json.loads(ED2K_FOLDERS_FILE.read_text(encoding="utf-8") or "{}")
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _remember_ed2k_folder(name, folder_id):
+    data = _load_ed2k_folders()
+    if name:
+        data[name] = folder_id
+        # 只保留最近 500 条，避免无限增长
+        if len(data) > 500:
+            for key in list(data.keys())[: len(data) - 500]:
+                data.pop(key, None)
+    try:
+        ED2K_FOLDERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        ED2K_FOLDERS_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:  # noqa: BLE001
+        logger.warning("cannot save ed2k folder map: %s", exc)
+
+
+def _ed2k_folder_for(name):
+    data = _load_ed2k_folders()
+    value = data.get(name)
+    if value in (None, ""):
+        spec = (load_settings().get("aria2_folder") or "").strip()
+        return int(spec) if spec.isdigit() else None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def mldonkey_call(command):
+    """向 mldonkey 的 Web 接口发一条控制台命令。"""
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        resp = await client.get(MLDONKEY_URL + "/submit", params={"q": command})
+        resp.raise_for_status()
+        return resp.text
+
+
+async def _ed2k_upload_loop():
+    """监听 mldonkey 的完成目录：稳定后移入下载目录并排入上传队列。"""
+    ED2K_DONE_DIR.mkdir(parents=True, exist_ok=True)
+    seen = {}
+    logger.info("ed2k watcher started (dir=%s, every %ss)", ED2K_DONE_DIR, ED2K_POLL_SECONDS)
+    while True:
+        try:
+            for entry in sorted(ED2K_DONE_DIR.iterdir()):
+                if not entry.is_file() or entry.name.startswith("."):
+                    continue
+                st = entry.stat()
+                sig = (st.st_size, int(st.st_mtime))
+                if st.st_size <= 0:
+                    seen[entry.name] = sig
+                    continue
+                if seen.get(entry.name) != sig:
+                    seen[entry.name] = sig      # 还在写，等下一轮
+                    continue
+                folder_id = _ed2k_folder_for(entry.name)
+                dest = DOWNLOAD_DIR / entry.name
+                try:
+                    if dest.exists():
+                        dest = DOWNLOAD_DIR / (entry.stem + "-" + str(int(time.time())) + entry.suffix)
+                    entry.replace(dest)
+                except OSError as exc:  # noqa: BLE001
+                    logger.warning("ed2k move failed for %s: %s", entry.name, exc)
+                    continue
+                logger.info("ed2k download finished: %s (%.1f MB) -> upload queue", entry.name, st.st_size / 1048576.0)
+                seen.pop(entry.name, None)
+                try:
+                    await enqueue_file_upload(dest, folder_id, st.st_size, display_name=entry.name)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("ed2k enqueue failed for %s: %s", entry.name, exc)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("ed2k watcher error: %s", exc)
+        await asyncio.sleep(ED2K_POLL_SECONDS)
+
+
 async def aria2_call(method, params=None):
     payload = {"jsonrpc": "2.0", "id": "teleplay-up", "method": method}
     call_params = []
@@ -1369,6 +1466,8 @@ def start_worker():
         asyncio.create_task(_initial_poll())
         asyncio.create_task(_queue_watchdog())
         asyncio.create_task(_sync_loop())
+        if os.environ.get("MLDONKEY_URL", "http://mldonkey:4080"):
+            asyncio.create_task(_ed2k_upload_loop())
         if os.environ.get("UP_AUTOSTART_HASH_BACKFILL", "1") == "1":
             async def _resume_backfill():
                 await asyncio.sleep(20)
@@ -1640,7 +1739,9 @@ async def up_add_torrent(
     targets = _extract_targets((payload or {}).get("url"))
     if not targets:
         raise HTTPException(status_code=400, detail="url is required")
-    for target in targets:
+    ed2k_targets = [t for t in targets if t.lower().startswith("ed2k://")]
+    plain_targets = [t for t in targets if not t.lower().startswith("ed2k://")]
+    for target in plain_targets:
         if not (
             target.startswith("magnet:")
             or target.startswith("http://")
@@ -1648,14 +1749,30 @@ async def up_add_torrent(
         ):
             raise HTTPException(
                 status_code=400,
-                detail="only magnet, a 40-char info hash, or an http(s) link is supported",
+                detail="only magnet, a 40-char info hash, an http(s) link or an ed2k link is supported",
             )
+    for target in ed2k_targets:
+        if not ED2K_RE.fullmatch(target.strip()):
+            raise HTTPException(status_code=400, detail="invalid ed2k link")
     folder_id = await _resolve_folder_id(
         db, (payload or {}).get("folder"), bool((payload or {}).get("create_folder"))
     )
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    ed2k_ok = 0
+    for target in ed2k_targets:
+        parts = target.split("|")
+        ed2k_name = parts[2].strip() if len(parts) > 3 else ""
+        try:
+            await mldonkey_call("dllink " + target.strip())
+            ed2k_ok += 1
+            _remember_ed2k_folder(ed2k_name, folder_id)
+            logger.info("ed2k link queued in mldonkey: %s", ed2k_name or target[:60])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("mldonkey rejected %s: %s", target[:60], exc)
+            if not ed2k_ok and not plain_targets:
+                raise HTTPException(status_code=502, detail="mldonkey error: " + str(exc)[:200])
     gids = []
-    for target in targets:
+    for target in plain_targets:
         try:
             gid = await aria2_call("aria2.addUri", [[target], {"dir": str(DOWNLOAD_DIR)}])
         except Exception as exc:  # noqa: BLE001
@@ -1665,13 +1782,14 @@ async def up_add_torrent(
             continue
         _remember_torrent_folder(gid, folder_id)
         gids.append(gid)
-    if not gids:
-        raise HTTPException(status_code=502, detail="no task was accepted by aria2")
+    if not gids and not ed2k_ok:
+        raise HTTPException(status_code=502, detail="no task was accepted (aria2/mldonkey)")
     return {
         "ok": True,
-        "gid": gids[0],
+        "gid": gids[0] if gids else None,
         "gids": gids,
         "count": len(gids),
+        "ed2k": ed2k_ok,
         "folder_id": folder_id,
     }
 

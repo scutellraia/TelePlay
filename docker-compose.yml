@@ -102,6 +102,25 @@ services:
       - telegram-tv-network
 
   # -----------------------------------------
+  # mldonkey (ed2k / Kademlia)
+  # -----------------------------------------
+  mldonkey:
+    build: ./mldonkey
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      # ed2k TCP + Kad UDP：公网可达才能拿到 HighID（需在安全组放行）
+      - "4662:4662/tcp"
+      - "4665:4665/udp"
+      - "4672:4672/udp"
+    volumes:
+      - mldonkey_data:/var/lib/mldonkey
+      - downloads:/downloads
+    networks:
+      - telegram-tv-network
+
+  # -----------------------------------------
   # Web Interface (React + Nginx)
   # -----------------------------------------
   web:
@@ -126,6 +145,8 @@ volumes:
   aria2_config:
     driver: local
   downloads:
+    driver: local
+  mldonkey_data:
     driver: local
 
 # -----------------------------------------
