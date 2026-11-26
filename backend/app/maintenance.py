@@ -5,6 +5,7 @@
    24 小时内的碎片保留，方便浏览器续传。
 2. 清理 /downloads 下超过 24 小时的空目录（aria2 为每个任务建目录，但从不删除）。
    如果 aria2 里仍有任务指向这个目录，就跳过——等任务被手动停掉后再过 24 小时才删。
+   ed2k(mldonkey) 的目录树（默认 /downloads/ed2k/**）属于受保护路径，永不清理。
 
 另外提供 prune_empty_parent()：上传成功并删除源文件后，顺手把因此变空的父目录删掉。
 """
@@ -22,6 +23,18 @@ RESUME_DIR = UPLOAD_TMP_DIR / ".resume"
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOADS_DIR", "/downloads"))
 
 STALE_SECONDS = 24 * 3600
+
+# ed2k(mldonkey) 的目录树必须存在，不能被「空目录清理」删掉
+_ED2K_ROOT = os.environ.get("ED2K_DIR", str(DOWNLOAD_DIR / "ed2k"))
+PROTECTED_DIRS = {os.path.realpath(_ED2K_ROOT)}
+
+
+def _is_protected(path):
+    real = os.path.realpath(str(path))
+    for root in PROTECTED_DIRS:
+        if real == root or real.startswith(root + os.sep):
+            return True
+    return False
 INTERVAL_SECONDS = 24 * 3600
 
 _task = None
@@ -86,6 +99,8 @@ def _purge_empty_dirs(referenced):
         for name in dirnames:
             path = os.path.join(dirpath, name)
             try:
+                if _is_protected(path):
+                    continue
                 if os.listdir(path):
                     continue
                 if now - os.path.getmtime(path) < STALE_SECONDS:
@@ -135,6 +150,8 @@ def stop_maintenance():
 def prune_empty_parent(path, stop_at=None):
     """删除 path 的父目录，直至 stop_at（根目录本身不删）。空目录以外的会直接失败。"""
     root = os.path.realpath(str(stop_at or DOWNLOAD_DIR))
+    if _is_protected(path):
+        return False
     try:
         candidate = os.path.dirname(os.path.realpath(str(path)))
     except OSError:
