@@ -149,19 +149,33 @@ def _mldonkey_active_files():
 
 
 def _uploading_files():
-    """上传队列里正在处理的文件（不能被当残留删掉）。"""
-    from .routers.up import _load_file_jobs
+    """不能被当残留删掉的文件：上传队列 + 失败重试清单。
+
+    失败上传会留在磁盘等用户重试（up-failed.json 记着路径），它们既不在下载器引用里，
+    也不在活跃队列里，必须单独保护，否则 24 小时后会被当垃圾清掉。
+    """
+    from .routers.up import _load_file_jobs, _load_failed
 
     files = set()
+
+    def add(value):
+        if isinstance(value, str) and value:
+            files.add(os.path.realpath(value))
+
     try:
         for job in _load_file_jobs() or []:
             if isinstance(job, dict):
                 for key in ("path", "file", "local_path"):
-                    value = job.get(key)
-                    if isinstance(value, str) and value:
-                        files.add(os.path.realpath(value))
+                    add(job.get(key))
     except Exception as exc:  # noqa: BLE001
         logger.warning("maintenance: cannot read upload jobs: %s", exc)
+    try:
+        for item in _load_failed() or []:
+            if isinstance(item, dict):
+                for key in ("path", "file", "local_path"):
+                    add(item.get(key))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("maintenance: cannot read failed list: %s", exc)
     return files
 
 
@@ -190,6 +204,9 @@ def _purge_orphan_files(referenced_files, uploading_files):
             try:
                 real = os.path.realpath(path)
                 if real in referenced_files or real in uploading_files:
+                    continue
+                # aria2 的 xxx.aria2 控制文件：目标仍被引用时必须保留，否则断点信息丢失
+                if real.endswith(".aria2") and real[: -len(".aria2")] in referenced_files:
                     continue
                 if now - os.path.getmtime(real) < STALE_SECONDS:
                     continue
